@@ -115,7 +115,8 @@ The OpenAPI generator configuration lives entirely inside `app/build.gradle.kts`
 ```kotlin
 openApiGenerate {
     generatorName.set("kotlin")
-    inputSpec.set("$rootDir/../mymail/openapi.yaml")   // relative to the repository root
+    inputSpec.set(providers.gradleProperty("openApiSpecPath")
+        .getOrElse("$rootDir/../mymail/openapi.yaml")) // override via gradle.properties
     outputDir.set(layout.buildDirectory.dir("generated/openapi").get().asFile.absolutePath)
     apiPackage.set("nu.staldal.mymail.api")
     modelPackage.set("nu.staldal.mymail.model")
@@ -149,8 +150,11 @@ generated files; they are regenerated on every clean build.
 
 ### Retrofit / OkHttp setup (`NetworkModule.kt`)
 
-- Retrofit is held in a `AtomicReference<Retrofit>` singleton. The reference is rebuilt
-  and atomically swapped whenever the user changes the server URL in Setup.
+- Retrofit is managed by a Hilt `@Singleton` class `RetrofitHolder` (in `di/NetworkModule.kt`)
+  that wraps an `AtomicReference<Retrofit>`. All repository classes inject `RetrofitHolder`
+  and call `holder.get().create(FooApi::class.java)` to obtain API instances. When the user
+  changes the server URL in Setup, `RetrofitHolder.rebuild()` atomically replaces the inner
+  `Retrofit` instance.
 - A single `OkHttpClient` is shared. It has:
   - `BasicAuthInterceptor` — adds `Authorization: Basic …` from `CredentialStore`.
   - `ConnectTimeout` / `ReadTimeout` / `WriteTimeout`: 30 seconds each.
@@ -240,8 +244,8 @@ destinations. Tablet adaptive layout is deferred to v1+.
   - Subject (bold when unread)
   - Date (adaptive format matching the web UI rules)
   - Attachment indicator icon
-  - `send_failed` badge: shown only in Scheduled (yellow) and Drafts (red); the flag
-    does not appear in other folders
+  - `send_failed` badge (OpenAPI Message model field): shown only in Scheduled (yellow)
+    and Drafts (red); the flag does not appear in other folders
 - Infinite scroll: loads the next page when the user reaches the end of the list
   (`offset += 50`). Stop paginating when the returned item count is less than 50.
 - Pull-to-refresh reloads from offset 0.
@@ -252,7 +256,7 @@ destinations. Tablet adaptive layout is deferred to v1+.
 - Long-press a message to enter multi-select mode. Toolbar actions in multi-select:
   - **Mark read / unread** — `PATCH /api/v1/messages` with `{"ids": […], "read": true/false}`
   - **Move to folder** (folder picker dialog) — `POST /api/v1/messages/move`. The **Move**
-    action is disabled entirely when any selected message is in Drafts, Scheduled, or
+    action is disabled entirely when the current folder is Drafts, Scheduled, or
     Snoozed (the server rejects such sources with 400).
   - **Delete** — `DELETE /api/v1/messages` with `{"ids": […]}`
 
@@ -273,8 +277,9 @@ destinations. Tablet adaptive layout is deferred to v1+.
   `ACTION_VIEW` (using `FileProvider`).
 - **Thread section:** fetches `GET /api/v1/messages/{id}/thread`. Shown as a
   collapsible list of message summaries below the body. Tapping a summary navigates to
-  that message's detail screen. When `truncated` is true, show a "Thread too long"
-  notice.
+  that message's detail screen; pressing Back from there returns directly to the Message
+  List (not to the originating detail screen). When `truncated` is true, show a "Thread
+  too long" notice.
 
 ### Action bar (varies by folder)
 
@@ -284,7 +289,7 @@ destinations. Tablet adaptive layout is deferred to v1+.
 | Sent             | Forward, Move, Delete                                                      |
 | Drafts           | Edit (→ Compose), Discard (with confirmation)                              |
 | Scheduled        | Delete (permanent)                                                         |
-| Snoozed          | Reply, Reply All, Forward, Move, Mark as junk, Delete                      |
+| Snoozed          | Reply, Reply All, Forward, Move, Mark as junk                              |
 | Junk             | Not junk, Move, Delete (permanent)                                         |
 | Trash            | Move, Delete (permanent)                                                   |
 
@@ -318,18 +323,48 @@ Supports new mail, reply, reply-all, forward, and draft editing.
 | Attachments| List of attached files; **Add attachment** button opens the system file picker |
 
 **Pre-population for Reply / Reply All / Forward:**
-Fetch the source message via `GET /api/v1/messages/{id}` and apply the same
-pre-population rules as the web UI (see REQUIREMENTS.md → Compose). For Forward,
-pass `source_message_id` on draft creation to copy attachments server-side.
+Fetch the source message via `GET /api/v1/messages/{id}` and pre-fill fields as follows:
+
+| Field   | Reply                                              | Reply All                                                                 | Forward          |
+|---------|----------------------------------------------------|---------------------------------------------------------------------------|------------------|
+| To      | Source Reply-To if present, else source From       | Same as Reply; also add source To/Cc recipients, excluding own identities | (empty)          |
+| Cc      | (empty)                                            | Remaining source To/Cc recipients, excluding own identities               | (empty)          |
+| Bcc     | (empty)                                            | (empty)                                                                   | (empty)          |
+| Subject | `Re: ` + source subject (suppress duplicate `Re:` prefixes) | Same as Reply                                                  | `Fwd: ` + source subject |
+| Body    | Attribution line + quoted source body (see below)  | Same as Reply                                                              | Original headers + quoted source body (see below) |
+
+**Quoted body format — Reply / Reply All:**
+```
+On <date>, <from address> wrote:
+> <source body, each line prefixed with "> ">
+```
+
+**Quoted body format — Forward:**
+```
+---------- Forwarded message ----------
+From: <source From>
+Date: <source Date>
+Subject: <source Subject>
+To: <source To>
+
+<source body>
+```
+
+For Forward, pass `source_message_id` on draft creation to copy attachments server-side.
+`source_message_id` is only used for Forward; Reply and Reply-All omit it — thread
+continuity for replies is handled by the server via standard `In-Reply-To`/`References`
+email headers.
 
 **Auto-save:**
 Start an auto-save coroutine on a 30-second `delay` loop. On first save, call
 `POST /api/v1/drafts` (without attachments, even if files are already queued locally)
 and store the returned `id`. On subsequent saves call `PUT /api/v1/drafts/{id}`. Track a
 dirty flag; mark dirty on any field edit, clear it after each successful save. If the
-user navigates away before saving, cancel any in-flight auto-save and, in `onStop`,
-perform a synchronous save only when the dirty flag is set. Locally queued attachments
-are never uploaded during auto-save — they are uploaded only at send time.
+user navigates away before saving, cancel any in-flight auto-save and, in
+`ComposeViewModel.onCleared()`, launch a coroutine with `NonCancellable` context to
+perform a final save if the dirty flag is set (ViewModel is cleared when the screen
+leaves the back-stack). Locally queued attachments are never uploaded during auto-save —
+they are uploaded only at send time.
 
 **Send:**
 Disable the Send button while in flight. If no `draftId` exists yet (the user tapped
@@ -339,6 +374,9 @@ exist, upload them via `PUT /api/v1/drafts-with-attachments/{id}` before calling
 `/send`. Always send via `POST /api/v1/drafts/{id}/send`.
 On 201 navigate back.
 On 400/500 show the server error message inline above the Send button.
+If the attachment upload (`PUT /api/v1/drafts-with-attachments/{id}`) fails: show the
+error message inline above the Send button; retain the draft ID and locally queued
+attachments so the user can retry. Do not proceed to `/send`.
 
 **Attachments:**
 Attach files using `ActivityResultContracts.GetMultipleContents`. Store selected file
@@ -356,8 +394,7 @@ added files are queued locally and uploaded at send time via
 ## Search Screen
 
 - Search bar at the top (triggered by clicking the search icon in the Folder List).
-- Optional folder filter: `DropdownMenu` listing all folders; default is "All folders
-  (except Junk, Drafts, Scheduled)" — this matches the API behaviour when `folder_id` is
+- Optional folder filter: `DropdownMenu` listing all folders; default is "All mail" — this matches the API behaviour when `folder_id` is
   omitted and should be stated in the UI label or tooltip to avoid user confusion.
 - Optional date range: two `DatePicker` dialogs (From date, To date).
 - Calls `GET /api/v1/messages/search?q=…&folder_id=…&date_from=…&date_to=…&limit=50&offset=0`.
@@ -379,7 +416,7 @@ A `TabRow` with six tabs, mirroring the web UI:
 |--------------|----------------------------------------------------|
 | Identities   | CRUD list of identities; set default               |
 | Folders      | CRUD list of user folders; reorder via drag-handle |
-| Filters      | CRUD list of filters; reorder via drag-handle      |
+| Filters      | Read-only list of filters (editing is out of scope for v1) |
 | Spam         | Enable/disable toggle, score header, threshold     |
 | Contacts     | Paginated contact list; add / edit / delete        |
 | Preferences  | App-level preferences (see below)                  |
@@ -393,14 +430,14 @@ Built-in folders are shown but edit/delete controls are hidden. Deleting a folde
 prompts "Messages will be moved to Trash".
 
 **Filters tab:** Each filter row shows name and a summary of match criteria + action.
-Edit opens a full-screen dialog with all fields. Reordering is done with up/down arrow
-buttons on each list item (drag-to-reorder is deferred to v1+).
-The `match_to` label is "To / Cc".
+Read-only in v1 — no add, edit, delete, or reorder. Filter editing is deferred to v1+.
 
 **Spam tab:** Toggle plus two text fields for score header name and threshold.
 `PUT /api/v1/spam-filter` on save.
 
-**Contacts tab:** Paginated list. Search field filters via `q=`. Add / edit / delete.
+**Contacts tab:** Paginated list via `GET /api/v1/contacts?q=…&limit=50&offset=0`.
+Search field filters via `q=`. Infinite scroll with `offset += 50`; stop paginating when
+the returned count is less than 50. Add / edit / delete.
 
 **Preferences tab:** These are stored in regular `SharedPreferences` (not encrypted):
 
@@ -408,7 +445,7 @@ The `match_to` label is "To / Cc".
 |---------------------|------------|-------------------------------------------------|
 | Dark mode           | System     | System / Light / Dark                           |
 | Message list density| Normal     | Compact / Normal / Relaxed (row height)         |
-| New-mail notifications | Off    | Enables Android notification channel; requests POST_NOTIFICATIONS permission |
+| New-mail notifications | Off    | Enables Android notification channel; requests POST_NOTIFICATIONS permission at the moment the user toggles the preference on (if not already granted) |
 
 There is also a **Server** entry (not a tab) at the bottom of the Settings screen that
 shows the current server URL and a **Change server** button which navigates to Setup.
@@ -441,8 +478,18 @@ The background worker checks whether the app is currently in the foreground (via
 `ProcessLifecycleOwner` or an equivalent foreground flag) and skips its poll and
 notification if so, deferring to the foreground poller.
 
-The background worker is enqueued on first launch (after setup) with
-`ExistingPeriodicWorkPolicy.KEEP` so it survives app restarts.
+The background worker is enqueued immediately after a successful Connect on the Setup
+screen, and again on app cold-start if credentials are already stored, using
+`ExistingPeriodicWorkPolicy.KEEP` so duplicate enqueues are no-ops and it survives
+app restarts.
+
+If the worker receives HTTP 401: post a "Session expired — tap to sign in" notification
+on the `mymail_new_mail` channel that deep-links to the Setup screen via
+`TaskStackBuilder`; then cancel the periodic work request so polling stops until the
+user re-authenticates (the worker is re-enqueued after a successful Setup).
+
+Clear all posted new-mail notifications and reset the persisted unread-count baseline
+when the user navigates to the Inbox message list screen.
 
 
 ---
@@ -464,7 +511,7 @@ The background worker is enqueued on first launch (after setup) with
 
 | Condition                  | Behaviour                                                         |
 |----------------------------|-------------------------------------------------------------------|
-| Network error / timeout    | `Snackbar` with "Retry" action; retry once after 2 seconds        |
+| Network error / timeout    | `Snackbar` with "Retry" action; automatically retries once after 2 seconds without user interaction; a second failure is terminal until the user taps Retry again |
 | 400 Bad Request            | Show server `error` message inline near the triggering UI element |
 | 401 Unauthorized           | Navigate to Setup screen                                          |
 | 404 Not Found (detail screen) | Show "Not found" inline in the detail pane                     |
@@ -478,13 +525,13 @@ The background worker is enqueued on first launch (after setup) with
 ## Date / Time Display
 
 Timestamps are displayed in the device's local timezone using the same adaptive rules
-as the web UI:
+as the web UI. Rules are evaluated top-to-bottom; the first matching rule wins.
 
 | Age                | Format                     | Example           |
 |--------------------|----------------------------|-------------------|
 | < 1 minute         | "just now"                 | "just now"        |
 | 1 min – < 1 hour   | Relative ("42 min ago")    | "42 min ago"      | ¹
-| 1 hour – 23:59     | Time only (HH:mm, 24-hour) | "14:32"           |
+| Same day, ≥ 1 hour | Time only (HH:mm, 24-hour) | "14:32"           |
 | Yesterday          | "Yesterday HH:mm"          | "Yesterday 09:15" | ²
 | 2–6 days ago       | Weekday + time             | "Mon 14:32"       |
 | 7 days – same year | Short date + time          | "Apr 3, 14:32"    |
@@ -494,7 +541,9 @@ as the web UI:
 "minutes ago" (full word) for the web UI.
 
 ² "Yesterday" means the calendar day before today in the device's local timezone (any
-time on that calendar date, regardless of elapsed hours).
+time on that calendar date, regardless of elapsed hours). Because rules are evaluated
+top-to-bottom, a message sent yesterday but within the last hour still matches the
+"1 min – < 1 hour" rule first.
 
 Message detail always shows the full form with timezone abbreviation.
 Long-press a date/time chip to copy the full ISO 8601 string.
@@ -529,7 +578,11 @@ to version control.
 - HTML message body rendering (WebView) — plain text display only
 - Rich text / HTML compose (plain text only)
 - Inline attachment preview (download + external viewer only)
-- Snooze — Snoozed folder is shown read-only; no snooze or edit-snooze actions
+- Snooze — no snooze or edit-snooze actions; the Snoozed folder is accessible for
+  reading, replying, forwarding, and moving messages, but deleting a snoozed message is
+  not permitted (see action bar table)
+- Filter editing — the Filters settings tab is read-only; add/edit/delete/reorder of
+  filters is deferred to v1+
 - Scheduled send — no "Send later" in Compose; Scheduled folder is shown with Delete only
 - Drag-to-reorder for filters and identities (tap-to-reorder with up/down arrows as
   a simpler alternative is acceptable for v1)
