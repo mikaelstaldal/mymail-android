@@ -1,2 +1,2 @@
-# SPEC.md — Review Issues
+# SPEC.md — Implementation Issues
 

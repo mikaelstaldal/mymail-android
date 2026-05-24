@@ -191,7 +191,7 @@ Shown on first launch (no credentials stored) or after a 401 response.
   `EncryptedSharedPreferences` and navigates to the Folder List. On failure, shows an
   inline error.
 - If credentials already exist, this screen is skipped at startup.
-- When navigated to via the **Change server** button in Settings, the Server URL and credential fields are pre-filled with the currently saved values.
+- The Server URL and credential fields are pre-filled with the currently saved values whenever credentials are already stored — both when navigated to via the **Change server** button in Settings and when redirected after a 401 response.
 
 
 ---
@@ -216,6 +216,55 @@ Compose Navigation with a single `NavHost`. Route names:
 
 On phones (and v1 in general), folder list and message list are separate full-screen
 destinations. Tablet adaptive layout is deferred to v1+.
+
+Compose routes share the base route `compose` with optional arguments. Each optional
+argument must be declared in the NavGraph with:
+```kotlin
+navArgument("argName") { nullable = true; defaultValue = null }
+```
+Omitting these declarations causes a `NavGraph` inflation failure at runtime. Affected
+routes: `compose?replyTo={id}`, `compose?replyAllTo={id}`, `compose?forwardOf={id}`,
+`compose?draftId={id}`.
+
+### Deep-link URI patterns
+
+Declare deep links on two destinations in `NavGraph.kt` so that `NavDeepLinkBuilder`
+can synthesise the correct back-stack for notification `PendingIntent`s:
+
+```kotlin
+composable(
+    route = "messages/{folderId}",
+    deepLinks = listOf(navDeepLink { uriPattern = "mymail://messages/{folderId}" })
+) { … }
+
+composable(
+    route = "setup",
+    deepLinks = listOf(navDeepLink { uriPattern = "mymail://setup" })
+) { … }
+```
+
+Register the `mymail://` scheme in `AndroidManifest.xml` with an `<intent-filter>` on
+`MainActivity` so the OS can resolve these URIs.
+
+
+---
+
+## Built-in Folder IDs
+
+Built-in folder IDs are hardcoded constants in the Android client; they must match the
+values assigned by the server.
+
+| Constant        | ID | Folder    |
+|-----------------|----|-----------|
+| `INBOX_ID`      | 1  | Inbox     |
+| `SENT_ID`       | 2  | Sent      |
+| `DRAFTS_ID`     | 3  | Drafts    |
+| `SCHEDULED_ID`  | 4  | Scheduled |
+| `SNOOZED_ID`    | 5  | Snoozed   |
+| `JUNK_ID`       | 6  | Junk      |
+| `TRASH_ID`      | 7  | Trash     |
+
+User-created folders always have `id ≥ 100`.
 
 
 ---
@@ -245,10 +294,13 @@ destinations. Tablet adaptive layout is deferred to v1+.
   - Subject (bold when unread)
   - Date (adaptive format matching the web UI rules)
   - Attachment indicator icon
-  - `send_failed` badge (OpenAPI Message model field): shown only in Scheduled (yellow)
-    and Drafts (red); the flag does not appear in other folders
+  - `send_failed` badge (boolean field, present in both the message-list and detail
+    response models): shown only in Scheduled (yellow) and Drafts (red); the flag
+    does not appear in other folders
 - Row height adapts to the **Message list density** preference: Compact — 56 dp,
-  Normal — 72 dp (default), Relaxed — 88 dp.
+  Normal — 72 dp (default), Relaxed — 88 dp. The `send_failed` badge and attachment
+  indicator icon are always vertically centred within the row regardless of the row
+  height.
 - Infinite scroll: loads the next page when the user reaches the end of the list
   (`offset += 50`). Stop paginating when the returned item count is less than 50.
   A page returning 0 items satisfies this condition and the empty result is discarded.
@@ -297,17 +349,21 @@ destinations. Tablet adaptive layout is deferred to v1+.
   }
   ```
   This replaces the current detail entry in the back-stack so that pressing Back lands
-  on the Message List. When `truncated` is true, show a "Thread too long" notice.
+  on whichever screen was below the current detail entry: the Message List when navigating
+  from there, or Search when navigating from a search result. When `truncated` is true,
+  show a "Thread too long" notice.
 
 ### Action bar (varies by folder)
 
 The action bar uses the `folder_id` field from the fetched message object to determine
 which row of the table below applies. This is true regardless of how the user navigated
-to the screen (from a Message List, from Search, or from a thread).
+to the screen (from a Message List, from Search, or from a thread). Match `folder_id`
+against the built-in constants from the [Built-in Folder IDs](#built-in-folder-ids)
+section; any `folder_id ≥ 100` is a user folder and falls in the same row as Inbox.
 
 | Folder           | Actions shown                                                              |
 |------------------|----------------------------------------------------------------------------|
-| Inbox / user folders (id ≥ 100) | Reply, Reply All, Forward, Move, Mark as junk, Delete    |
+| Inbox (`folder_id == INBOX_ID`) or user folders (`folder_id ≥ 100`) | Reply, Reply All, Forward, Move, Mark as junk, Delete    |
 | Sent             | Forward, Move, Delete                                                      |
 | Drafts           | Edit (→ Compose), Discard (with confirmation)                              |
 | Scheduled        | Delete (permanent)                                                         |
@@ -325,6 +381,10 @@ to the message list; the app stays in the current folder (does not navigate to J
 `navController.popBackStack()` to return to the previous screen. The message is moved
 to Inbox server-side; if the previous screen was the Junk message list, it will refresh
 and no longer show the message.
+
+After a successful **Move** or **Delete** from Message Detail, call
+`navController.popBackStack()` to return to the Message List, and trigger a full list
+refresh (reload from offset 0) so the moved or deleted message no longer appears.
 
 
 ---
@@ -353,8 +413,12 @@ Fetch the source message via `GET /api/v1/messages/{id}` and pre-fill fields as 
 |---------|----------------------------------------------------|---------------------------------------------------------------------------|------------------|
 | To      | Source Reply-To if present, else source From       | Same as Reply; also add source To/Cc recipients, excluding own identities | (empty)          |
 | Cc      | (empty)                                            | Remaining source To/Cc recipients, excluding own identities               | (empty)          |
+
+"Excluding own identities" means: omit any address whose email address matches one of
+the user's identity addresses (comparison is case-insensitive on both local part and
+domain, per RFC 5321 convention).
 | Bcc     | (empty)                                            | (empty)                                                                   | (empty)          |
-| Subject | `Re: ` + source subject (suppress duplicate `Re:` prefixes) | Same as Reply                                                  | `Fwd: ` + source subject |
+| Subject | `Re: ` + source subject (suppress duplicate `Re:` prefixes — strip all leading `Re:` prefixes case-insensitively using `^(?i)(re:\s*)+` before prepending `Re: `) | Same as Reply | `Fwd: ` + source subject |
 | Body    | Attribution line + quoted source body (see below)  | Same as Reply                                                              | Original headers + quoted source body (see below) |
 
 **Quoted body format — Reply / Reply All:**
@@ -381,8 +445,13 @@ email headers.
 
 **Auto-save:**
 When the screen opens via `compose?draftId={id}`, initialise the ViewModel's `draftId`
-from the navigation argument. The auto-save loop then uses `PUT /api/v1/drafts/{id}`
-from the very first save and never calls `POST /api/v1/drafts`.
+from the navigation argument, then fetch the existing draft via `GET /api/v1/drafts/{id}`
+to pre-populate all form fields (From, To, Cc, Bcc, Reply-To, Subject, Body, and any
+existing server-side attachments shown as removable chips). If this fetch fails, show a
+centred error message with a Retry button and do not start the auto-save loop until the
+fetch succeeds — this prevents the loop from overwriting the server draft with blank
+fields. The auto-save loop then uses `PUT /api/v1/drafts/{id}` from the very first save
+and never calls `POST /api/v1/drafts`.
 
 Start an auto-save coroutine on a 30-second `delay` loop. On first save (new compose),
 call `POST /api/v1/drafts` (without attachments, even if files are already queued
@@ -440,6 +509,12 @@ added files are queued locally and uploaded at send time via
   omitted and should be stated in the UI label or tooltip to avoid user confusion.
 - Optional date range: two `DatePicker` dialogs (From date, To date).
 - Calls `GET /api/v1/messages/search?q=…&folder_id=…&date_from=…&date_to=…&limit=50&offset=0`.
+  `date_from` and `date_to` are RFC 3339 timestamps (e.g. `2025-01-15T00:00:00Z`).
+  When a date filter is set from a `DatePicker` (which gives a local calendar date),
+  convert to UTC midnight for `date_from` and UTC end-of-day for `date_to`.
+- Whenever the query text or any date filter changes, reset `offset` to 0 and discard
+  previously loaded results before issuing a new request. Pull-to-refresh reloads from
+  offset 0 with the current filters applied.
 - Results rendered as a `LazyColumn` of message summaries, each showing the FTS
   `snippet` below the subject.
 - Tapping a result navigates to Message Detail.
@@ -460,20 +535,25 @@ A `TabRow` with six tabs, mirroring the web UI:
 
 | Tab          | Content                                            |
 |--------------|----------------------------------------------------|
-| Identities   | CRUD list of identities; set default               |
+| Identities   | Read-only list of identities                       |
 | Folders      | CRUD list of user folders                          |
 | Filters      | Read-only list of filters (editing is out of scope for v1) |
 | Spam         | Enable/disable toggle, score header, threshold     |
 | Contacts     | Paginated contact list; add / edit / delete        |
 | Preferences  | App-level preferences (see below)                  |
 
-**Identities tab:** Each row shows name, address, and a default-star icon.
-Edit opens a bottom sheet with name, address, is\_default toggle, and signature text
-field. Delete requires confirmation; disabled when only one identity exists.
+**Identities tab:** Read-only list of identities. Each row shows name and address.
+Identity management (create, edit, delete, set default) is out of scope for v1.
 
 **Folders tab:** Only user-created folders (id ≥ 100) can be renamed or deleted.
 Built-in folders are shown but edit/delete controls are hidden. Deleting a folder
-prompts "Messages will be moved to Trash".
+prompts "Messages will be moved to Trash". Mutation endpoints:
+
+| Operation | Endpoint                          |
+|-----------|-----------------------------------|
+| Create    | `POST /api/v1/folders`            |
+| Rename    | `PUT /api/v1/folders/{id}`        |
+| Delete    | `DELETE /api/v1/folders/{id}`     |
 
 **Filters tab:** Each filter row shows name and a summary of match criteria + action.
 Read-only in v1 — no add, edit, delete, or reorder. Filter editing is deferred to v1+.
@@ -485,7 +565,13 @@ button if the fetch fails. `PUT /api/v1/spam-filter` on save.
 
 **Contacts tab:** Paginated list via `GET /api/v1/contacts?q=…&limit=50&offset=0`.
 Search field filters via `q=`. Infinite scroll with `offset += 50`; stop paginating when
-the returned count is less than 50. Add / edit / delete.
+the returned count is less than 50. Add / edit / delete. Mutation endpoints:
+
+| Operation | Endpoint                          |
+|-----------|-----------------------------------|
+| Create    | `POST /api/v1/contacts`           |
+| Update    | `PUT /api/v1/contacts/{id}`       |
+| Delete    | `DELETE /api/v1/contacts/{id}`    |
 
 **Preferences tab:** These are stored in regular `SharedPreferences` (not encrypted):
 
@@ -493,7 +579,7 @@ the returned count is less than 50. Add / edit / delete.
 |---------------------|------------|-------------------------------------------------|
 | Dark mode           | System     | System / Light / Dark                           |
 | Message list density| Normal     | Compact / Normal / Relaxed (row height)         |
-| New-mail notifications | Off    | Enables Android notification channel; requests POST_NOTIFICATIONS permission at the moment the user toggles the preference on (if not already granted) |
+| New-mail notifications | Off    | Enables Android notification channel; requests POST_NOTIFICATIONS permission at the moment the user toggles the preference on (if not already granted). If the user denies the permission, revert the toggle to Off and show a Snackbar explaining that the notification permission was denied. |
 
 There is also a **Server** entry (not a tab) at the bottom of the Settings screen that
 shows the current server URL and a **Change server** button which navigates to Setup.
@@ -503,13 +589,20 @@ shows the current server URL and a **Change server** button which navigates to S
 
 ## New Mail Notifications
 
+### Channel registration
+
+The `mymail_new_mail` `NotificationChannel` must be created in
+`MyMailApplication.onCreate()` before any notification is posted. Creation is
+idempotent — calling `createNotificationChannel()` on an existing channel is a no-op.
+
 ### Foreground polling
 
 While the app is in the foreground, a coroutine on `LifecycleScope` polls
 `GET /api/v1/folders` every 30 seconds. The result of the first poll is used as the
-baseline; no notification fires on that first result. On every subsequent poll, when the
-Inbox `unread_count` is higher than the previous value, fire an Android notification (if
-permission granted and preference enabled) and update the unread badge.
+in-memory baseline (reset on each app launch); no notification fires on that first
+result. On every subsequent poll, when the Inbox `unread_count` is higher than the
+previous value, fire an Android notification (if permission granted and preference
+enabled) and update the unread badge.
 
 ### Background polling
 
@@ -524,12 +617,33 @@ baseline and does not post a notification — consistent with the foreground pol
 first-poll behaviour.
 
 The notification uses a dedicated `NotificationChannel` (`mymail_new_mail`).
-Tapping the notification launches the app with a back-stack constructed via
-`TaskStackBuilder` so the user can press Back from Inbox to reach the Folder List.
+Tapping the notification launches the app and navigates to the Inbox message list.
+Use `NavDeepLinkBuilder` with the `mymail://messages/{folderId}` deep-link URI
+(substituting `INBOX_ID`); Compose Navigation synthesises the back-stack automatically
+so the user can press Back from Inbox to reach the Folder List.
 
-The background worker checks whether the app is currently in the foreground (via
-`ProcessLifecycleOwner` or an equivalent foreground flag) and skips its poll and
-notification if so, deferring to the foreground poller.
+The background worker checks whether the app is currently in the foreground and skips
+its poll and notification if so, deferring to the foreground poller. Foreground state
+is tracked via an `AtomicBoolean isAppInForeground` property in `MyMailApplication`,
+set to `true` in `DefaultLifecycleObserver.onStart()` and `false` in `onStop()`. The
+observer is registered in `MyMailApplication.onCreate()`. The worker reads this flag
+directly since it runs in the same process.
+
+Because `MailPollingWorker` needs Hilt-injected dependencies (`RetrofitHolder`,
+`CredentialStore`, `SharedPreferences`), annotate it with `@HiltWorker` and inject via
+`@AssistedInject`. Wire `HiltWorkerFactory` in `MyMailApplication`:
+```kotlin
+@HiltAndroidApp
+class MyMailApplication : Application(), Configuration.Provider {
+    @Inject lateinit var workerFactory: HiltWorkerFactory
+    override val workManagerConfiguration get() =
+        Configuration.Builder().setWorkerFactory(workerFactory).build()
+}
+```
+Remove the default `WorkManager` initializer from `AndroidManifest.xml` by adding
+`<provider android:name="androidx.startup.InitializationProvider" … tools:node="remove" />`
+(or use the `androidx.work:work-runtime` `removeWorkManagerInitializer` manifest merger
+rule).
 
 The background worker is enqueued immediately after a successful Connect on the Setup
 screen, and again on app cold-start if credentials are already stored, using
@@ -537,12 +651,14 @@ screen, and again on app cold-start if credentials are already stored, using
 app restarts.
 
 If the worker receives HTTP 401: post a "Session expired — tap to sign in" notification
-on the `mymail_new_mail` channel that deep-links to the Setup screen via
-`TaskStackBuilder`; then cancel the periodic work request so polling stops until the
-user re-authenticates (the worker is re-enqueued after a successful Setup).
+on the `mymail_new_mail` channel. Use `NavDeepLinkBuilder` with the `mymail://setup`
+deep-link URI to navigate to the Setup screen. Then cancel the periodic work request
+so polling stops until the user re-authenticates (the worker is re-enqueued after a
+successful Setup).
 
-Clear all posted new-mail notifications and reset the persisted unread-count baseline
-when the user navigates to the Inbox message list screen.
+Clear all posted new-mail notifications, reset the persisted unread-count baseline in
+`SharedPreferences`, and reset the in-memory foreground-poller baseline when the user
+navigates to the Inbox message list screen.
 
 
 ---
@@ -559,11 +675,13 @@ when the user navigates to the Inbox message list screen.
   navigation stack directly. Instead, inject an `AuthEventBus` — a `@Singleton` Hilt
   class wrapping a `MutableSharedFlow<Unit>` (replay = 0). The interceptor emits on
   this flow when it receives a 401 response. `MainActivity` collects the flow in
-  `lifecycleScope` and executes:
+  `lifecycleScope` and, only when `isAppInForeground` is `true`, executes:
   ```kotlin
   navController.navigate("setup") { popUpTo(0) { inclusive = true } }
   ```
-  This clears the entire back-stack and presents the Setup screen. After a successful
+  This clears the entire back-stack and presents the Setup screen. When the app is in
+  the background the collector skips navigation; the background worker's own 401 path
+  (post "Session expired" notification, cancel periodic work) handles that case instead. After a successful
   reconnect, `RetrofitHolder.rebuild()` refreshes the HTTP client with the new
   credentials.
 
@@ -574,13 +692,20 @@ when the user navigates to the Inbox message list screen.
 
 | Condition                  | Behaviour                                                         |
 |----------------------------|-------------------------------------------------------------------|
-| Network error / timeout    | `Snackbar` with "Retry" action shown immediately on the first failure. The request is then automatically retried once after 2 seconds; if the retry also fails, the `Snackbar` persists until the user taps Retry. This behaviour applies to all `IOException` and timeout errors across all screens. |
+| Network error / timeout    | `Snackbar` with "Retry" action shown immediately on the first failure. The request is then automatically retried once after 2 seconds; if the retry also fails, the `Snackbar` persists until the user taps Retry. This behaviour applies to all `IOException` and timeout errors across all screens, **except** `POST /api/v1/drafts/{id}/send` (see note below). |
 | 400 Bad Request            | Show server `error` message inline near the triggering UI element |
 | 401 Unauthorized           | Navigate to Setup screen                                          |
 | 404 Not Found (detail screen) | Show "Not found" inline in the detail pane                     |
 | 404 Not Found (list screen)   | Navigate back to the Folder List with a Snackbar error          |
+| 404 Not Found (Compose — draft fetch on open) | Show a centred error with a Retry button; do not start the auto-save loop |
+| 404 Not Found (Search, Settings sub-tabs) | Show a centred inline error message with a Retry button |
 | 409 Conflict               | Show server `error` message inline                                |
 | 500 Internal Server Error  | `Snackbar` with server `error` message                            |
+
+**Auto-retry exclusion for Send:** `POST /api/v1/drafts/{id}/send` is not idempotent —
+a timeout may occur after the server already dispatched the email. The auto-retry policy
+does **not** apply to the send call. On a network error or timeout during send, show the
+`Snackbar` with a Retry action but do not automatically retry after 2 seconds.
 
 
 ---
@@ -615,7 +740,10 @@ Message detail always shows the full form with timezone abbreviation:
 `EEE, d MMM yyyy, HH:mm z` (e.g. "Mon, 3 Apr 2023, 14:32 CEST"). Use
 `java.time.format.DateTimeFormatter` with the device's locale for day/month names and
 a fixed 24-hour time pattern.
-Long-press a date/time chip to copy the full ISO 8601 string.
+Long-press a date/time chip to copy the full ISO 8601 string. On Android 13+
+(API 33+) the system displays a clipboard confirmation automatically. On Android 12 and
+below (API ≤ 32), show a brief `Snackbar` confirming that the date was copied to the
+clipboard.
 
 
 ---
@@ -650,6 +778,8 @@ to version control.
 - Snooze — no snooze or edit-snooze actions; the Snoozed folder is accessible for
   reading, replying, forwarding, and moving messages, but deleting a snoozed message is
   not permitted (see action bar table)
+- Identity management — the Identities settings tab is read-only; create/edit/delete/
+  set-default is deferred to v1+
 - Filter editing — the Filters settings tab is read-only; add/edit/delete/reorder of
   filters is deferred to v1+
 - Scheduled send — no "Send later" in Compose; Scheduled folder is shown with Delete only
