@@ -137,6 +137,7 @@ kotlin.sourceSets["main"].kotlin.srcDir(
 )
 tasks.named("compileDebugKotlin") { dependsOn("openApiGenerate") }
 tasks.named("compileReleaseKotlin") { dependsOn("openApiGenerate") }
+tasks.named("compileDebugUnitTestKotlin") { dependsOn("openApiGenerate") }
 ```
 
 The generated code produces one Retrofit `interface` per API tag (e.g. `FoldersApi`,
@@ -152,7 +153,9 @@ generated files; they are regenerated on every clean build.
 
 - Retrofit is managed by a Hilt `@Singleton` class `RetrofitHolder` (in `di/NetworkModule.kt`)
   that wraps an `AtomicReference<Retrofit>`. All repository classes inject `RetrofitHolder`
-  and call `holder.get().create(FooApi::class.java)` to obtain API instances. When the user
+  and call `holder.get().create(FooApi::class.java)` to obtain API instances **on every
+  request**; API interface instances must not be cached at field-initialisation time, since
+  `holder.get()` may return a different `Retrofit` after a `rebuild()`. When the user
   changes the server URL in Setup, `RetrofitHolder.rebuild()` atomically replaces the inner
   `Retrofit` instance.
 - A single `OkHttpClient` is shared. It has:
@@ -225,7 +228,7 @@ destinations. Tablet adaptive layout is deferred to v1+.
 Compose routes share the base route `compose` with optional arguments. Each optional
 argument must be declared in the NavGraph with:
 ```kotlin
-navArgument("argName") { nullable = true; defaultValue = null }
+navArgument("argName") { type = NavType.StringType; nullable = true; defaultValue = null }
 ```
 Omitting these declarations causes a `NavGraph` inflation failure at runtime. Affected
 routes: `compose?replyTo={id}`, `compose?replyAllTo={id}`, `compose?forwardOf={id}`,
@@ -336,11 +339,15 @@ User-created folders always have `id ≥ 100`.
   - **Mark read / unread** — `PATCH /api/v1/messages` with `{"ids": […], "read": true/false}`.
     This bulk endpoint is distinct from the single-message `PATCH /api/v1/messages/{id}`
     used in Message Detail; both must be defined in the OpenAPI spec.
-  - **Move to folder** (folder picker dialog) — `POST /api/v1/messages/move`. The **Move**
-    action is disabled entirely when the current folder is Drafts or Scheduled (the server
-    rejects such sources with 400). The folder picker lists all folders except Scheduled,
-    Snoozed, Drafts, and the current folder (consistent with the Message Detail picker).
+  - **Move to folder** (folder picker dialog) — `POST /api/v1/messages/move` with body
+    `{"ids": […], "folder_id": targetFolderId}`. The **Move** action is disabled entirely
+    when the current folder is Drafts or Scheduled (the server rejects such sources with
+    400). The folder picker lists all folders except Scheduled, Snoozed, Drafts, and the
+    current folder (consistent with the Message Detail picker).
   - **Delete** — `DELETE /api/v1/messages` with `{"ids": […]}`
+
+Pressing the system Back button while in multi-select mode exits multi-select (same as
+the standard contextual-action-bar Back behaviour on Android).
 
 
 ---
@@ -350,23 +357,29 @@ User-created folders always have `id ≥ 100`.
 - Fetches `GET /api/v1/messages/{id}`. If the initial fetch fails, show a centred
   error message with a Retry button.
 - After a successful fetch, if the message has `read: false`, issues
-  `PATCH /api/v1/messages/{id}` with `{"read": true}` to mark as read.
+  `PATCH /api/v1/messages/{id}` with `{"read": true}` to mark as read. The endpoint
+  returns 200 with the updated message object (`Result<Message>` in the repository);
+  the response is used to refresh the detail view.
 - **Header section** (collapsed by default, expandable by tapping anywhere on the
   collapsed header row; a trailing chevron icon indicates the expand/collapse state):
   From, To, Cc, Bcc, Reply-To, Date, Subject.
 - **`send_failed` banner:** If the message has `send_failed: true`, show a banner
-  immediately below the header — yellow for messages in Scheduled, red for messages in
-  Drafts (same colour coding as the Message List badge).
+  immediately below the header — yellow when `folder_id == SCHEDULED_ID`, red when
+  `folder_id == DRAFTS_ID` (determined from the fetched message object, same colour
+  coding as the Message List badge).
 - **Body section:** displays `body_text` in a `SelectionContainer` with a monospace
   font (plain text only in v1).
 - **Attachments section:** lists all attachments by name and size. Tapping an
-  attachment downloads it via `GET /api/v1/attachments/{id}` and opens it with
-  `ACTION_VIEW` (using `FileProvider`).
+  attachment downloads it via `GET /api/v1/attachments/{id}`, writes it to the app's
+  cache directory (`getCacheDir()`), and opens it with `ACTION_VIEW` using a
+  `FileProvider` URI (authority: `nu.staldal.mymail.fileprovider`). No
+  `WRITE_EXTERNAL_STORAGE` permission is needed on API 29+.
 - **Thread section:** fetches `GET /api/v1/messages/{id}/thread`. The thread fetch is
   issued in parallel with the main message fetch (no dependency between the two). If the
   thread fetch fails while the main message fetch succeeded, show an inline error message
   and a Retry button within the thread section; the main message body continues to be
-  displayed normally. Shown as a collapsible list of message summaries below the body.
+  displayed normally. Shown as a collapsible list of message summaries below the body,
+  expanded by default.
   Tapping a summary navigates to that message's detail screen; pressing Back from there
   returns directly to the Message List (not to the originating detail screen). Implement
   using:
@@ -409,6 +422,13 @@ to the message list; the app stays in the current folder (does not navigate to J
 to Inbox server-side; if the previous screen was the Junk message list, it will refresh
 and no longer show the message.
 
+The **Delete** action in Scheduled, Junk, and Trash folders is permanent. Show a
+confirmation dialog before proceeding (same pattern as Discard in Drafts).
+
+The **Move** action (single message) calls `POST /api/v1/messages/move` with body
+`{"ids": [id], "folder_id": targetFolderId}` — the same bulk endpoint used in
+multi-select, with a single-element array.
+
 After a successful **Move** or **Delete** from Message Detail, call
 `navController.popBackStack()` to return to the Message List, and trigger a full list
 refresh (reload from offset 0) so the moved or deleted message no longer appears.
@@ -425,7 +445,7 @@ Supports new mail, reply, reply-all, forward, and draft editing.
 | Field      | Notes                                                                          |
 |------------|--------------------------------------------------------------------------------|
 | From       | `DropdownMenu` populated from `GET /api/v1/identities`. For new compose, pre-select the identity with `is_default: true`. For Reply/Reply-All, pre-select the identity whose address matches a To or Cc address of the source message; fall back to the default identity if no match is found. |
-| To         | Chip text field with autocomplete from `GET /api/v1/contacts?q=…&limit=10`     |
+| To         | Chip text field with autocomplete from `GET /api/v1/contacts?q=…&limit=10`. Autocomplete fires after the user types at least 1 character, debounced at 300 ms. |
 | Cc         | Same as To (collapsed by default, expand via button)                           |
 | Bcc        | Same as To (collapsed by default)                                              |
 | Reply-To   | Single plain text field (optional, collapsed by default)                       |
@@ -440,13 +460,15 @@ Fetch the source message via `GET /api/v1/messages/{id}` and pre-fill fields as 
 |---------|----------------------------------------------------|---------------------------------------------------------------------------|------------------|
 | To      | Source Reply-To if present, else source From       | Source Reply-To if present, else source From (same as Reply), excluding own identities | (empty)          |
 | Cc      | (empty)                                            | All source To/Cc recipients, excluding own identities                     | (empty)          |
+| Bcc     | (empty)                                            | (empty)                                                                   | (empty)          |
+| Subject | `Re: ` + source subject (suppress duplicate `Re:` prefixes — strip all leading `Re:` prefixes case-insensitively using `^(?i)(re:\s*)+` before prepending `Re: `) | Same as Reply | `Fwd: ` + source subject (suppress duplicate `Fwd:` prefixes — strip all leading `Fwd:` prefixes case-insensitively using `^(?i)(fwd:\s*)+` before prepending `Fwd: `) |
+| Body    | Attribution line + quoted source body (see below)  | Same as Reply                                                              | Original headers + quoted source body (see below) |
 
 "Excluding own identities" means: omit any address whose email address matches one of
 the user's identity addresses (comparison is case-insensitive on both local part and
-domain, per RFC 5321 convention).
-| Bcc     | (empty)                                            | (empty)                                                                   | (empty)          |
-| Subject | `Re: ` + source subject (suppress duplicate `Re:` prefixes — strip all leading `Re:` prefixes case-insensitively using `^(?i)(re:\s*)+` before prepending `Re: `) | Same as Reply | `Fwd: ` + source subject |
-| Body    | Attribution line + quoted source body (see below)  | Same as Reply                                                              | Original headers + quoted source body (see below) |
+domain, per RFC 5321 convention). This applies even if the only candidate for the `To`
+field is a Reply-To address that matches an own identity — in that case `To` is left
+empty and the user must fill it in manually.
 
 **Quoted body format — Reply / Reply All:**
 ```
@@ -466,7 +488,9 @@ To: <source To>
 <source body>
 ```
 
-For Forward, pass `source_message_id` on draft creation to copy attachments server-side.
+For Forward, pass `source_message_id` in the initial `POST /api/v1/drafts` body so the
+server copies attachments at draft-creation time. `source_message_id` is included only
+in this first `POST`; subsequent `PUT /api/v1/drafts/{id}` calls never resend it.
 `source_message_id` is only used for Forward; Reply and Reply-All omit it — thread
 continuity for replies is handled by the server via standard `In-Reply-To`/`References`
 email headers.
@@ -496,9 +520,11 @@ If the user navigates away before saving, cancel any in-flight auto-save and, in
 perform a final save if the dirty flag is set (ViewModel is cleared when the screen
 leaves the back-stack).
 
-The auto-save request body contains text fields only (From, To, Cc, Bcc, Reply-To,
-Subject, Body). It never uploads, creates, or deletes attachments; attachments are
-handled exclusively at send time or via immediate-delete for existing draft attachments.
+The auto-save request body contains text fields only: `from` (string), `to` (array of
+strings), `cc` (array of strings), `bcc` (array of strings), `reply_to` (string, may be
+empty), `subject` (string), `body` (string). It never uploads, creates, or deletes
+attachments; attachments are handled exclusively at send time or via immediate-delete for
+existing draft attachments.
 
 Locally queued attachments are never uploaded during auto-save — they are uploaded only
 at send time.
@@ -508,8 +534,10 @@ Before initiating Send, cancel the running auto-save job. Disable the Send butto
 in flight. If no `draftId` exists yet (the user tapped Send before the first 30-second
 auto-save fired), perform a synchronous `POST /api/v1/drafts` first to obtain one, then
 proceed. If locally queued attachments exist, upload them via
-`PUT /api/v1/drafts-with-attachments/{id}` before calling `/send`. Always send via
-`POST /api/v1/drafts/{id}/send`.
+`PUT /api/v1/drafts-with-attachments/{id}` before calling `/send`. The request is
+`multipart/form-data` and must include both the current text field values (same fields
+as the auto-save body: `from`, `to`, `cc`, `bcc`, `reply_to`, `subject`, `body`) and
+one file part per queued attachment. Always send via `POST /api/v1/drafts/{id}/send`.
 On 201 navigate back (the draft is consumed by the send operation; the auto-save loop is
 not restarted).
 On 400/500 show the server error message inline above the Send button and restart the
@@ -578,9 +606,12 @@ a Retry button if the fetch fails. Read-only list of identities; each row shows 
 address. Identity management (create, edit, delete, set default) is out of scope for v1.
 
 **Folders tab:** Fetches `GET /api/v1/folders` on enter. Show an inline error with a
-Retry button if the fetch fails. Only user-created folders (id ≥ 100) can be renamed or deleted.
-Built-in folders are shown but edit/delete controls are hidden. Deleting a folder
-prompts "Messages will be moved to Trash". Mutation endpoints:
+Retry button if the fetch fails. Only user-created folders (id ≥ 100) can be renamed or
+deleted. Built-in folders are shown but edit/delete controls are hidden. A **+** FAB
+opens a simple dialog with a single Name text field to create a new folder. Renaming a
+folder opens the same dialog pre-filled with the current name. Deleting a folder shows
+a confirmation dialog with the message "Messages will be moved to Trash". Mutation
+endpoints:
 
 | Operation | Endpoint                          |
 |-----------|-----------------------------------|
@@ -589,22 +620,27 @@ prompts "Messages will be moved to Trash". Mutation endpoints:
 | Delete    | `DELETE /api/v1/folders/{id}`     |
 
 **Filters tab:** Fetches `GET /api/v1/filters` on enter. Show an inline error with a
-Retry button if the fetch fails. Each filter row shows name and a summary of match
-criteria + action. Read-only in v1 — no add, edit, delete, or reorder. Filter editing is
-deferred to v1+.
+Retry button if the fetch fails. Each filter row shows the filter name on the first line
+and a one-line summary on the second line in the form:
+`If <field> contains <value> → <action>`
+Read-only in v1 — no add, edit, delete, or reorder. Filter editing is deferred to v1+.
 
-**Spam tab:** Toggle plus two text fields for score header name and threshold.
-On enter, call `GET /api/v1/spam-filter` to load the current settings into the form
-fields. Show a loading indicator while fetching; show an inline error with a Retry
-button if the fetch fails. `PUT /api/v1/spam-filter` on save.
+**Spam tab:** Toggle plus two text fields for score header name and threshold, and an
+explicit **Save** button. On enter, call `GET /api/v1/spam-filter` to load the current
+settings into the form fields. Show a loading indicator while fetching; show an inline
+error with a Retry button if the fetch fails. Tapping **Save** calls
+`PUT /api/v1/spam-filter` with the current form values.
 
 **Contacts tab:** Paginated list via `GET /api/v1/contacts?q=…&limit=50&offset=0`.
-Show an inline error with a Retry button if the initial fetch fails; if a subsequent
-infinite-scroll page fetch fails, show an inline error with a Retry button at the bottom
-of the list. Search field filters via `q=`; keystrokes are debounced with a 300 ms delay
-before issuing a request. When the query changes, reset `offset` to 0 and discard
-previously loaded results before issuing a new request. Infinite scroll with
-`offset += 50`; stop paginating when the returned count is less than 50. Add / edit /
+Each contact has a **name** (display name) and an **email address**; the list row shows
+the name on the first line and the email on the second line. Show an inline error with a
+Retry button if the initial fetch fails; if a subsequent infinite-scroll page fetch
+fails, show an inline error with a Retry button at the bottom of the list. Search field
+filters via `q=`; keystrokes are debounced with a 300 ms delay before issuing a request.
+When the query changes, reset `offset` to 0 and discard previously loaded results before
+issuing a new request. Infinite scroll with `offset += 50`; stop paginating when the
+returned count is less than 50. Tapping a contact opens an edit dialog; a **+** FAB
+creates a new contact. Both add and edit dialogs have Name and Email fields. Add / edit /
 delete. Mutation endpoints:
 
 | Operation | Endpoint                          |
@@ -637,8 +673,10 @@ idempotent — calling `createNotificationChannel()` on an existing channel is a
 
 ### Foreground polling
 
-While the app is in the foreground, a coroutine on `LifecycleScope` polls
-`GET /api/v1/folders` every 30 seconds. The result of the first poll is used as the
+While the app is in the foreground, a coroutine on `MainActivity.lifecycleScope` polls
+`GET /api/v1/folders` every 30 seconds. The in-memory baseline resets on activity
+recreation (e.g. screen rotation), consistent with the "reset on each app launch"
+behaviour — the first poll after recreation does not fire a notification. The result of the first poll is used as the
 in-memory baseline (reset on each app launch); no notification fires on that first
 result. On every subsequent poll, when the Inbox `unread_count` is higher than the
 previous value, fire an Android notification (if permission granted and preference
@@ -682,8 +720,17 @@ class MyMailApplication : Application(), Configuration.Provider {
         Configuration.Builder().setWorkerFactory(workerFactory).build()
 }
 ```
-Remove the default `WorkManager` initializer from `AndroidManifest.xml` by adding
-`<provider android:name="androidx.startup.InitializationProvider" … tools:node="remove" />`.
+Remove the default `WorkManager` initializer from `AndroidManifest.xml` by adding:
+```xml
+<provider
+    android:name="androidx.startup.InitializationProvider"
+    android:authorities="${applicationId}.androidx-startup"
+    tools:node="remove" />
+```
+
+The background worker persists the last-known Inbox unread count in `SharedPreferences`
+file `"mymail_prefs"` under the key `"inbox_unread_count"`. This is the same
+`SharedPreferences` file used by the Preferences tab for non-sensitive app settings.
 
 The background worker is enqueued immediately after a successful Connect on the Setup
 screen, and again on app cold-start if credentials are already stored, using
@@ -697,8 +744,11 @@ so polling stops until the user re-authenticates (the worker is re-enqueued afte
 successful Setup).
 
 Clear all posted new-mail notifications, reset the persisted unread-count baseline in
-`SharedPreferences`, and reset the in-memory foreground-poller baseline when the user
-navigates to the Inbox message list screen.
+`SharedPreferences` (`"inbox_unread_count"` key in `"mymail_prefs"`), and reset the
+in-memory foreground-poller baseline when the Inbox `MessageListScreen` composable
+enters composition. Implement via `LaunchedEffect(Unit)` in the Inbox message list
+composable — this fires on every composition of the Inbox screen (forward navigation,
+Back navigation into it, and after rotation).
 
 
 ---
@@ -724,9 +774,10 @@ navigates to the Inbox message list screen.
   401 responses are emitted. This clears the entire back-stack and presents the Setup
   screen. When the app is in the background the collector skips navigation; the background
   worker's own 401 path (post "Session expired" notification, cancel periodic work)
-  handles that case instead. After a successful
-  reconnect, `RetrofitHolder.rebuild()` refreshes the HTTP client with the new
-  credentials.
+  handles that case instead. After a successful reconnect, `RetrofitHolder.rebuild()`
+  rebuilds the `Retrofit` instance with the new base URL. The `OkHttpClient` is not
+  rebuilt; credentials are picked up automatically on the next request because
+  `BasicAuthInterceptor` reads from `CredentialStore` at request time.
 
 
 ---
@@ -743,7 +794,7 @@ navigates to the Inbox message list screen.
 | 404 Not Found (Compose — draft fetch on open) | Show a centred error with a Retry button; do not start the auto-save loop |
 | 404 Not Found (Search, Settings sub-tabs) | Show a centred inline error message with a Retry button |
 | 409 Conflict               | Show server `error` message inline                                |
-| 500 Internal Server Error  | `Snackbar` with server `error` message                            |
+| 500 Internal Server Error  | `Snackbar` with server `error` message (exception: 400/500 on `POST /api/v1/drafts/{id}/send` are shown inline above the Send button — see Compose Screen → Send) |
 
 **Auto-retry exclusion for Send:** `POST /api/v1/drafts/{id}/send` is not idempotent —
 a timeout may occur after the server already dispatched the email. The auto-retry policy
@@ -765,8 +816,8 @@ as the web UI. Rules are evaluated top-to-bottom; the first matching rule wins.
 | Same day, ≥ 1 hour | Time only (HH:mm, 24-hour) | "14:32"           | ³
 | Yesterday          | "Yesterday HH:mm"          | "Yesterday 09:15" | ²
 | 2–6 days ago       | Weekday + time             | "Mon 14:32"       |
-| 7 days – same year | Short date + time          | "Apr 3, 14:32"    |
-| Previous years     | Short date with year       | "Apr 3, 2023"     |
+| 7 days – same year | Short date + time          | "Apr 3, 14:32"    | ⁴
+| Previous years     | Short date with year only  | "Apr 3, 2023"     | ⁴
 
 ¹ "min" is an intentional abbreviation for the Android client; `REQUIREMENTS.md` uses
 "minutes ago" (full word) for the web UI.
@@ -778,6 +829,12 @@ top-to-bottom, a message sent yesterday but within the last hour still matches t
 
 ³ "Same day" means the same calendar day as today in the device's local timezone
 (midnight boundary), consistent with the Yesterday definition in footnote ².
+
+⁴ "7 days – same year" means: the message date is ≥ 7 full calendar days before today
+AND in the same calendar year as today. "Previous years" means a different calendar year
+from today (the two rules are mutually exclusive). The time component is shown for the
+same-year rule but intentionally omitted for previous years — older messages are
+displayed date-only for brevity.
 
 Message detail always shows the full form with timezone abbreviation:
 `EEE, d MMM yyyy, HH:mm z` (e.g. "Mon, 3 Apr 2023, 14:32 CEST"). Use
