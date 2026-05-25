@@ -1,2 +1,0 @@
-# SPEC.md — Implementation Issues
-
