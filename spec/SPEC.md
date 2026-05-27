@@ -423,11 +423,14 @@ Snoozed, Drafts, and the current folder).
 
 **Mark as junk** calls `POST /api/v1/messages/{id}/mark-junk`. On success navigate back
 to the message list; the app stays in the current folder (does not navigate to Junk).
+On 400 (message is already in Junk, or is in Drafts, Scheduled, or Snoozed — race condition),
+show a Snackbar with the server error message.
 
 **Not junk** calls `POST /api/v1/messages/{id}/mark-not-junk`. On success call
 `navController.popBackStack()` to return to the previous screen. The message is moved
 to Inbox server-side; if the previous screen was the Junk message list, it will refresh
-and no longer show the message.
+and no longer show the message. On 400 (message is no longer in Junk — race condition),
+show a Snackbar with the server error message.
 
 The **Delete** action in Junk and Trash folders is permanent. Show a confirmation dialog
 before proceeding (same pattern as Discard in Drafts).
@@ -436,12 +439,16 @@ before proceeding (same pattern as Discard in Drafts).
 Drafts (not permanent deletion — `DELETE /messages/{id}` rejects Scheduled messages with
 400). Show a confirmation dialog before proceeding. On success, call
 `navController.popBackStack()` to return to the Message List and trigger a full list
-refresh.
+refresh. On 404 (the scheduler already sent or moved the message before the user
+confirmed — race condition), show a Snackbar ("Message was already processed") and call
+`navController.popBackStack()`.
 
 **Cancel snooze** calls `DELETE /api/v1/messages/{id}/snooze`, which returns the message
 to the folder it was in before snoozed (or Inbox if that folder was deleted). No
 confirmation dialog. On success, call `navController.popBackStack()` to return to the
 Snoozed Message List and trigger a full list refresh so the message no longer appears.
+On 400 (message is no longer in the Snoozed folder — race condition), show a Snackbar
+with the server error message and call `navController.popBackStack()`.
 
 The **Move** action (single message) calls `POST /api/v1/messages/move` with body
 `{"ids": [id], "folder_id": targetFolderId}` — the same bulk endpoint used in
@@ -464,11 +471,11 @@ Supports new mail, reply, reply-all, forward, and draft editing.
 | Field      | Notes                                                                          |
 |------------|--------------------------------------------------------------------------------|
 | From       | `DropdownMenu` populated from `GET /api/v1/identities`. For new compose, pre-select the identity with `is_default: true`. For Reply/Reply-All, pre-select the identity whose address matches a To or Cc address of the source message; fall back to the default identity if no match is found. |
-| To         | Chip text field with autocomplete from `GET /api/v1/contacts?q=…&limit=10`. Autocomplete fires after the user types at least 1 character, debounced at 300 ms. |
+| To         | Chip text field with autocomplete from `GET /api/v1/contacts?q=…&limit=10`. Autocomplete fires after the user types at least 1 character, debounced at 300 ms. Maximum 8192 characters (RFC 5322 comma-separated addresses). |
 | Cc         | Same as To (collapsed by default, expand via button)                           |
 | Bcc        | Same as To (collapsed by default)                                              |
-| Reply-To   | Single plain text field (optional, collapsed by default)                       |
-| Subject    | Single-line text field                                                         |
+| Reply-To   | Single plain text field (optional, collapsed by default). Maximum 8192 characters. |
+| Subject    | Single-line text field. Maximum 998 characters.                                |
 | Body       | Multi-line plain text field (`OutlinedTextField`, v1 is plain text only)       |
 | Attachments| List of attached files; **Add attachment** button opens the system file picker |
 
@@ -588,9 +595,12 @@ request must include ALL currently retained attachments: re-download any existin
 server-side attachments via `GET /api/v1/attachments/{id}` (caching them in the app's
 cache directory is acceptable) and include them alongside the new files as `attachments`
 parts in the same `multipart/form-data` PUT. If no `draftId` exists at file-selection
-time, first call `POST /api/v1/drafts` to obtain one before uploading. Show an inline
-error if the upload fails; the user can retry by tapping a Retry button in the attachments
-area.
+time, acquire `saveMutex` and, if `draftId` is still null inside the lock, call
+`POST /api/v1/drafts` with the current form field values (same request body as the
+auto-save) to obtain one; release the lock before proceeding with the upload. Acquiring
+`saveMutex` here prevents the auto-save loop from creating a duplicate draft
+simultaneously. Show an inline error if the upload fails; the user can retry by tapping
+a Retry button in the attachments area.
 
 For draft edits, existing server-side attachments are shown as removable chips; tapping
 × calls `DELETE /api/v1/drafts/{id}/attachments/{attachment_id}` immediately.
@@ -648,8 +658,9 @@ A `TabRow` with six tabs, mirroring the web UI:
 | Preferences  | App-level preferences (see below)                  |
 
 **Identities tab:** Fetches `GET /api/v1/identities` on enter. Show an inline error with
-a Retry button if the fetch fails. Read-only list of identities; each row shows name and
-address. Identity management (create, edit, delete, set default) is out of scope for v1.
+a Retry button if the fetch fails. Read-only list of identities ordered by position, then
+id; each row shows name and address. Identity management (create, edit, delete, set
+default) is out of scope for v1.
 
 **Folders tab:** Fetches `GET /api/v1/folders` on enter. Show an inline error with a
 Retry button if the fetch fails. Only user-created folders (id ≥ 100) can be renamed or
@@ -667,28 +678,50 @@ endpoints:
 
 **Filters tab:** Fetches `GET /api/v1/filters` on enter. Show an inline error with a
 Retry button if the fetch fails. Each filter row shows the filter name on the first line
-and a one-line summary on the second line in the form:
-`If <field> contains <value> → <action>`
-Read-only in v1 — no add, edit, delete, or reorder. Filter editing is deferred to v1+.
+and a one-line summary on the second line. Build the summary as follows:
+
+- **Condition part:** list every non-empty match field joined with " AND ":
+  `from contains '<value>'`, `to contains '<value>'`, `subject contains '<value>'`.
+  Example: `from contains 'newsletter@' AND subject contains 'weekly'`
+- **Action part:** map the `action` enum to a friendly string:
+  - `move` → `Move to <folder name>` (look up the folder name from the same folder list
+    fetched for the Folders tab; if the folder is not found, fall back to
+    `Move to folder #<id>`)
+  - `trash` → `Move to Trash`
+  - `mark_read` → `Mark as read`
+  - `drop` → `Drop`
+- **Full summary:** `If <condition> → <action>`
+
+The `stop` flag is not shown in the row. Read-only in v1 — no add, edit, delete, or
+reorder. Filter editing is deferred to v1+.
+
+To display folder names in the "move" action, the Filters tab reuses the folder list from
+the same `GET /api/v1/folders` call as the Folders tab. Fetch this list on tab enter
+(shared with the Folders tab; one request is sufficient if both tabs are displayed in the
+same settings session).
 
 **Spam tab:** Toggle plus two text fields for score header name and threshold, and an
 explicit **Save** button. On enter, call `GET /api/v1/spam-filter` to load the current
 settings into the form fields. Show a loading indicator while fetching; show an inline
 error with a Retry button if the fetch fails. Tapping **Save** calls
 `PUT /api/v1/spam-filter` with the current form values. The `score_threshold` field is
-a floating-point number (e.g. `5.0`); use a decimal-accepting input (not integer-only).
+a non-negative floating-point number (`minimum: 0`; a value of `0` means "match any
+message whose score header parses as a number"); use a decimal-accepting input (not
+integer-only). The `score_header` field must be non-empty after trimming.
 
 **Contacts tab:** Paginated list via `GET /api/v1/contacts?q=…&limit=50&offset=0`.
-Each contact has a **name** (display name) and an **email address**; the list row shows
-the name on the first line and the email on the second line. Show an inline error with a
-Retry button if the initial fetch fails; if a subsequent infinite-scroll page fetch
-fails, show an inline error with a Retry button at the bottom of the list. Search field
-filters via `q=`; keystrokes are debounced with a 300 ms delay before issuing a request.
-When the query changes, reset `offset` to 0 and discard previously loaded results before
-issuing a new request. Infinite scroll with `offset += 50`; stop paginating when the
-returned count is less than 50. Tapping a contact opens an edit dialog; a **+** FAB
-creates a new contact. Both add and edit dialogs have Name and Email fields. Add / edit /
-delete. Mutation endpoints:
+Contacts are returned ordered by name (empty names last), then address. Each contact has
+a **name** (display name) and an **email address**; the list row shows the name on the
+first line and the email on the second line. Show an inline error with a Retry button if
+the initial fetch fails; if a subsequent infinite-scroll page fetch fails, show an inline
+error with a Retry button at the bottom of the list. Search field filters via `q=`;
+keystrokes are debounced with a 300 ms delay before issuing a request. When the query
+changes, reset `offset` to 0 and discard previously loaded results before issuing a new
+request. Infinite scroll with `offset += 50`; stop paginating when the returned count is
+less than 50. Tapping a contact opens an edit dialog; a **+** FAB creates a new contact.
+Both add and edit dialogs have Name (optional) and Email (required, RFC 5322 addr-spec)
+fields. On 409 Conflict (duplicate address), show the server error message inline in the
+dialog. Add / edit / delete. Mutation endpoints:
 
 | Operation | Endpoint                          |
 |-----------|-----------------------------------|
@@ -937,6 +970,6 @@ to version control.
 - PGP / S-MIME
 - Multi-account support
 - Tablet adaptive layout (single-column phone layout is sufficient for v1)
-- Download raw `.eml` file (`GET /messages/{id}/raw`)
+- Download raw `.eml` file (`GET /api/v1/messages/{id}/raw`)
 - Flagged / starred messages — the `flagged` field is present in the API but no flag/star
   UI is exposed; a future version may add it
