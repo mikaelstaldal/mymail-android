@@ -275,10 +275,10 @@ values assigned by the server.
 | `INBOX_ID`      | 1  | Inbox     |
 | `SENT_ID`       | 2  | Sent      |
 | `DRAFTS_ID`     | 3  | Drafts    |
-| `SCHEDULED_ID`  | 4  | Scheduled |
-| `SNOOZED_ID`    | 5  | Snoozed   |
-| `JUNK_ID`       | 6  | Junk      |
-| `TRASH_ID`      | 7  | Trash     |
+| `TRASH_ID`      | 4  | Trash     |
+| `SCHEDULED_ID`  | 5  | Scheduled |
+| `SNOOZED_ID`    | 6  | Snoozed   |
+| `JUNK_ID`       | 7  | Junk      |
 
 User-created folders always have `id ≥ 100`.
 
@@ -357,9 +357,10 @@ the standard contextual-action-bar Back behaviour on Android).
 - Fetches `GET /api/v1/messages/{id}`. If the initial fetch fails, show a centred
   error message with a Retry button.
 - After a successful fetch, if the message has `read: false`, issues
-  `PATCH /api/v1/messages/{id}` with `{"read": true}` to mark as read. The endpoint
-  returns 200 with the updated message object (`Result<Message>` in the repository);
-  the response is used to refresh the detail view.
+  `PATCH /api/v1/messages/{id}` with `{"read": true}` to mark as read. On 200, update
+  the `read` flag in the locally held `MessageDetail` — the endpoint returns a
+  `MessageSummary` (no body text), so no re-fetch is needed and the already-loaded
+  detail continues to be displayed.
 - **Header section** (collapsed by default, expandable by tapping anywhere on the
   collapsed header row; a trailing chevron icon indicates the expand/collapse state):
   From, To, Cc, Bcc, Reply-To, Date, Subject.
@@ -497,9 +498,13 @@ email headers.
 
 **Auto-save:**
 When the screen opens via `compose?draftId={id}`, initialise the ViewModel's `draftId`
-from the navigation argument, then fetch the existing draft via `GET /api/v1/drafts/{id}`
+from the navigation argument, then fetch the existing draft via `GET /api/v1/messages/{id}`
 to pre-populate all form fields (From, To, Cc, Bcc, Reply-To, Subject, Body, and any
-existing server-side attachments shown as removable chips). If this fetch fails, show a
+existing server-side attachments shown as removable chips). There is no dedicated
+`GET /api/v1/drafts/{id}` endpoint — drafts are regular messages accessible via the
+messages endpoint. To pre-populate the From dropdown, match the draft's `from_addr`
+against the fetched identities list (case-insensitive address comparison); if no identity
+matches, pre-select the default identity. If this fetch fails, show a
 centred error message with a Retry button and do not start the auto-save loop until the
 fetch succeeds — this prevents the loop from overwriting the server draft with blank
 fields. The auto-save loop then uses `PUT /api/v1/drafts/{id}` from the very first save
@@ -520,11 +525,13 @@ If the user navigates away before saving, cancel any in-flight auto-save and, in
 perform a final save if the dirty flag is set (ViewModel is cleared when the screen
 leaves the back-stack).
 
-The auto-save request body contains text fields only: `from` (string), `to` (array of
-strings), `cc` (array of strings), `bcc` (array of strings), `reply_to` (string, may be
-empty), `subject` (string), `body` (string). It never uploads, creates, or deletes
-attachments; attachments are handled exclusively at send time or via immediate-delete for
-existing draft attachments.
+The auto-save request body is a `DraftRequest` JSON object with fields: `identity_id`
+(integer — the ID of the selected identity from the From dropdown), `to_addr` (string),
+`cc_addr` (string), `bcc_addr` (string), `reply_to_addr` (string, may be empty),
+`subject` (string), `body_text` (string). Address fields use RFC 5322 comma-separated
+format for multiple addresses (e.g. `"Alice <a@b.com>, Bob <c@d.com>"`). It never
+uploads, creates, or deletes attachments; attachments are handled exclusively at send
+time or via immediate-delete for existing draft attachments.
 
 Locally queued attachments are never uploaded during auto-save — they are uploaded only
 at send time.
@@ -535,9 +542,10 @@ in flight. If no `draftId` exists yet (the user tapped Send before the first 30-
 auto-save fired), perform a synchronous `POST /api/v1/drafts` first to obtain one, then
 proceed. If locally queued attachments exist, upload them via
 `PUT /api/v1/drafts-with-attachments/{id}` before calling `/send`. The request is
-`multipart/form-data` and must include both the current text field values (same fields
-as the auto-save body: `from`, `to`, `cc`, `bcc`, `reply_to`, `subject`, `body`) and
-one file part per queued attachment. Always send via `POST /api/v1/drafts/{id}/send`.
+`multipart/form-data` with a JSON part named `message` containing a `DraftRequest`
+(same fields as the auto-save body: `identity_id`, `to_addr`, `cc_addr`, `bcc_addr`,
+`reply_to_addr`, `subject`, `body_text`) and one or more file parts named `attachments`.
+Always send via `POST /api/v1/drafts/{id}/send`.
 On 201 navigate back (the draft is consumed by the send operation; the auto-save loop is
 not restarted).
 On 400/500 show the server error message inline above the Send button and restart the
@@ -616,7 +624,7 @@ endpoints:
 | Operation | Endpoint                          |
 |-----------|-----------------------------------|
 | Create    | `POST /api/v1/folders`            |
-| Rename    | `PUT /api/v1/folders/{id}`        |
+| Rename    | `PATCH /api/v1/folders/{id}`      |
 | Delete    | `DELETE /api/v1/folders/{id}`     |
 
 **Filters tab:** Fetches `GET /api/v1/filters` on enter. Show an inline error with a
