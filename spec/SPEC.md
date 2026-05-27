@@ -363,7 +363,9 @@ the standard contextual-action-bar Back behaviour on Android).
   detail continues to be displayed.
 - **Header section** (collapsed by default, expandable by tapping anywhere on the
   collapsed header row; a trailing chevron icon indicates the expand/collapse state):
-  From, To, Cc, Bcc, Reply-To, Date, Subject.
+  From, To, Cc, Bcc, Reply-To, Date, Subject. For messages in the Snoozed folder
+  (`folder_id == SNOOZED_ID`), additionally show a **Snoozed until** row displaying the
+  `snoozed_until` timestamp in the full date format (`EEE, d MMM yyyy, HH:mm z`).
 - **`send_failed` banner:** If the message has `send_failed: true`, show a banner
   immediately below the header — yellow when `folder_id == SCHEDULED_ID`, red when
   `folder_id == DRAFTS_ID` (determined from the fetched message object, same colour
@@ -492,9 +494,16 @@ To: <source To>
 For Forward, pass `source_message_id` in the initial `POST /api/v1/drafts` body so the
 server copies attachments at draft-creation time. `source_message_id` is included only
 in this first `POST`; subsequent `PUT /api/v1/drafts/{id}` calls never resend it.
-`source_message_id` is only used for Forward; Reply and Reply-All omit it — thread
-continuity for replies is handled by the server via standard `In-Reply-To`/`References`
-email headers.
+`source_message_id` is only used for Forward; Reply and Reply-All omit it.
+
+For Reply and Reply-All, set the threading fields in the initial `POST /api/v1/drafts`
+and repeat them in every subsequent `PUT /api/v1/drafts/{id}`:
+- `in_reply_to`: the source message's `message_id` field value (omit the field entirely
+  if `message_id` is null).
+- `references`: the source message's `references` list with `<{source.message_id}>`
+  appended (note: `MessageDetail.message_id` has no angle brackets, so wrap it when
+  appending). Omit the field if both the source `references` list is empty and
+  `message_id` is null.
 
 **Auto-save:**
 When the screen opens via `compose?draftId={id}`, initialise the ViewModel's `draftId`
@@ -529,9 +538,11 @@ The auto-save request body is a `DraftRequest` JSON object with fields: `identit
 (integer — the ID of the selected identity from the From dropdown), `to_addr` (string),
 `cc_addr` (string), `bcc_addr` (string), `reply_to_addr` (string, may be empty),
 `subject` (string), `body_text` (string). Address fields use RFC 5322 comma-separated
-format for multiple addresses (e.g. `"Alice <a@b.com>, Bob <c@d.com>"`). It never
-uploads, creates, or deletes attachments; attachments are handled exclusively at send
-time or via immediate-delete for existing draft attachments.
+format for multiple addresses (e.g. `"Alice <a@b.com>, Bob <c@d.com>"`). For Reply and
+Reply-All, also include `in_reply_to` and `references` as described above — these fields
+are present in every save call for the lifetime of the reply draft. It never uploads,
+creates, or deletes attachments; attachments are handled exclusively at send time or via
+immediate-delete for existing draft attachments.
 
 Locally queued attachments are never uploaded during auto-save — they are uploaded only
 at send time.
@@ -570,15 +581,19 @@ added files are queued locally and uploaded at send time via
 ## Search Screen
 
 - Search bar at the top (triggered by clicking the search icon in the Folder List).
-- Optional folder filter: `DropdownMenu` listing all folders; default is "All mail" — this matches the API behaviour when `folder_id` is
-  omitted and should be stated in the UI label or tooltip to avoid user confusion.
+- Optional folder filter: `DropdownMenu` listing all folders; default is "All mail" — when
+  `folder_id` is omitted, the API searches all folders **except** Junk (id=7), Drafts (id=3),
+  and Scheduled (id=5). The UI label or tooltip should clarify this exclusion to avoid user
+  confusion.
 - Optional date range: two `DatePicker` dialogs (From date, To date).
 - Calls `GET /api/v1/messages/search?q=…&folder_id=…&date_from=…&date_to=…&limit=50&offset=0`.
-  `date_from` and `date_to` are RFC 3339 timestamps (e.g. `2025-01-15T00:00:00Z`).
+  `date_from` and `date_to` are RFC 3339 timestamps with timezone offset.
   When a date filter is set from a `DatePicker` (which gives a local calendar date),
-  convert to UTC midnight (`T00:00:00Z`) for `date_from` and to the start of the
-  following calendar day in UTC (`T00:00:00Z` of date + 1 day, exclusive upper bound)
-  for `date_to`.
+  convert to the start of that day in the device's local timezone for `date_from` and to
+  the start of the following calendar day in the device's local timezone for `date_to`
+  (exclusive upper bound). Use `ZonedDateTime.of(localDate, LocalTime.MIDNIGHT,
+  ZoneId.systemDefault())` to produce an RFC 3339 timestamp with the correct timezone
+  offset (e.g. `2025-01-15T00:00:00+02:00`).
 - Whenever the query text or any date filter changes, reset `offset` to 0 and discard
   previously loaded results before issuing a new request. Pull-to-refresh reloads from
   offset 0 with the current filters applied.
