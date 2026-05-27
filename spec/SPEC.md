@@ -330,25 +330,25 @@ User-created folders always have `id ≥ 100`.
   button (the generic Snackbar still fires; the inline Retry is additional).
 - Pull-to-refresh reloads from offset 0. Refresh replaces the entire in-memory list
   with only the first page result; previously loaded pages beyond page 1 are discarded.
-- **Mark all as read** action in the overflow menu calls
-  `POST /api/v1/folders/{folder_id}/mark-all-read`. On success, mark all currently
-  loaded message rows as read locally (update their visual style without reloading from
-  the server) and update the folder's unread-count badge to 0.
+- **Mark all as read** action in the overflow menu (visible in normal mode only; hidden
+  while multi-select is active) calls `POST /api/v1/folders/{folder_id}/mark-all-read`.
+  On success, mark all currently loaded message rows as read locally (update their visual
+  style without reloading from the server) and update the folder's unread-count badge to 0.
 - **Empty folder** action (Trash and Junk only) calls
   `DELETE /api/v1/folders/{folder_id}/messages` after a confirmation dialog.
-- Long-press a message to enter multi-select mode. Toolbar actions in multi-select:
+- Multi-select mode is not available in Drafts, Scheduled, or Snoozed folders — long-press
+  has no effect in those folders. This prevents issuing bulk operations that the server
+  rejects with 400 for messages in those folders.
+- Long-press a message (in any other folder) to enter multi-select mode. Toolbar actions
+  in multi-select:
   - **Mark read / unread** — `PATCH /api/v1/messages` with `{"ids": […], "read": true/false}`.
     This bulk endpoint is distinct from the single-message `PATCH /api/v1/messages/{id}`
     used in Message Detail; both must be defined in the OpenAPI spec.
   - **Move to folder** (folder picker dialog) — `POST /api/v1/messages/move` with body
-    `{"ids": […], "folder_id": targetFolderId}`. The **Move** action is disabled entirely
-    when the current folder is Drafts, Scheduled, or Snoozed (the server rejects messages
-    from those sources with 400). The folder picker lists all folders except Scheduled,
-    Snoozed, Drafts, and the current folder (consistent with the Message Detail picker).
-  - **Delete** — `DELETE /api/v1/messages` with `{"ids": […]}`. Note: the server rejects
-    this request with 400 if any selected message is currently in Scheduled, Snoozed, or
-    Drafts — these folders are excluded from multi-select in any case (see Move restriction
-    above), so this condition should not arise in practice.
+    `{"ids": […], "folder_id": targetFolderId}`. The folder picker lists all folders
+    except Scheduled, Snoozed, Drafts, and the current folder (consistent with the
+    Message Detail picker).
+  - **Delete** — `DELETE /api/v1/messages` with `{"ids": […]}`.
 
 Pressing the system Back button while in multi-select mode exits multi-select (same as
 the standard contextual-action-bar Back behaviour on Android).
@@ -414,7 +414,7 @@ section; any `folder_id ≥ 100` is a user folder and falls in the same row as I
 | Sent             | Forward, Move, Delete                                                      |
 | Drafts           | Edit (→ Compose), Discard (with confirmation)                              |
 | Scheduled        | Cancel scheduled send (→ Drafts)                                           |
-| Snoozed          | Reply, Reply All, Forward, Move, Mark as junk                              |
+| Snoozed          | Reply, Reply All, Forward, Cancel snooze                                   |
 | Junk             | Not junk, Move, Delete (permanent)                                         |
 | Trash            | Move, Delete (permanent)                                                   |
 
@@ -432,19 +432,25 @@ and no longer show the message.
 The **Delete** action in Junk and Trash folders is permanent. Show a confirmation dialog
 before proceeding (same pattern as Discard in Drafts).
 
-**Cancel scheduled send** calls `DELETE /scheduled/{id}`, which moves the message to
+**Cancel scheduled send** calls `DELETE /api/v1/scheduled/{id}`, which moves the message to
 Drafts (not permanent deletion — `DELETE /messages/{id}` rejects Scheduled messages with
 400). Show a confirmation dialog before proceeding. On success, call
 `navController.popBackStack()` to return to the Message List and trigger a full list
 refresh.
 
+**Cancel snooze** calls `DELETE /api/v1/messages/{id}/snooze`, which returns the message
+to the folder it was in before snoozed (or Inbox if that folder was deleted). No
+confirmation dialog. On success, call `navController.popBackStack()` to return to the
+Snoozed Message List and trigger a full list refresh so the message no longer appears.
+
 The **Move** action (single message) calls `POST /api/v1/messages/move` with body
 `{"ids": [id], "folder_id": targetFolderId}` — the same bulk endpoint used in
 multi-select, with a single-element array.
 
-After a successful **Move**, **Delete**, or **Cancel scheduled send** from Message Detail,
-call `navController.popBackStack()` to return to the Message List, and trigger a full
-list refresh (reload from offset 0) so the affected message no longer appears.
+After a successful **Move**, **Delete**, **Cancel scheduled send**, or **Cancel snooze**
+from Message Detail, call `navController.popBackStack()` to return to the Message List,
+and trigger a full list refresh (reload from offset 0) so the affected message no longer
+appears.
 
 
 ---
@@ -561,8 +567,9 @@ attachments; attachments are handled via immediate upload on file selection (see
 Attachments section) and immediate delete for existing draft attachments.
 
 **Send:**
-Before initiating Send, cancel the running auto-save job. Disable the Send button while
-in flight. If no `draftId` exists yet (the user tapped Send before the first 30-second
+The Send button is disabled when all three recipient fields (To, Cc, Bcc) are empty;
+it becomes enabled as soon as any one of them is non-empty. Before initiating Send,
+cancel the running auto-save job. Disable the Send button while in flight. If no `draftId` exists yet (the user tapped Send before the first 30-second
 auto-save fired), perform a synchronous `POST /api/v1/drafts` first to obtain one, then
 proceed. Because newly added files are uploaded immediately on selection (not deferred to
 send time), no attachment upload step is needed here. Always send via
@@ -915,9 +922,10 @@ to version control.
 - HTML message body rendering (WebView) — plain text display only
 - Rich text / HTML compose (plain text only)
 - Inline attachment preview (download + external viewer only)
-- Snooze — no snooze or edit-snooze actions; the Snoozed folder is accessible for
-  reading, replying, forwarding, and moving messages, but deleting a snoozed message is
-  not permitted (see action bar table)
+- Snooze — no snooze creation or re-snooze actions; the Snoozed folder is accessible for
+  reading, replying, forwarding, and cancelling the snooze (returning the message to its
+  original folder). Moving or deleting a snoozed message is not permitted by the server
+  (see action bar table)
 - Identity management — the Identities settings tab is read-only; create/edit/delete/
   set-default is deferred to v1+
 - Filter editing — the Filters settings tab is read-only; add/edit/delete/reorder of
