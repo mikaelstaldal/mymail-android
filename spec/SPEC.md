@@ -190,9 +190,10 @@ Shown on first launch (no credentials stored) or after a 401 response.
 - Password (obscured, toggle-to-reveal)
 
 **Behaviour:**
-- Tapping **Connect** calls `GET /api/v1/health`. On 200, stores credentials in
-  `EncryptedSharedPreferences` and navigates to the Folder List. On failure, shows an
-  inline error message:
+- Tapping **Connect** calls `GET /api/v1/folders` (an authenticated endpoint). On 200,
+  stores credentials in `EncryptedSharedPreferences` and navigates to the Folder List.
+  (`GET /api/v1/health` is not used here — it does not require authentication and cannot
+  validate credentials.) On failure, shows an inline error message:
   - Network error / no connectivity: "Could not connect — check the server URL and your
     network connection"
   - HTTP 401: "Invalid username or password"
@@ -341,10 +342,13 @@ User-created folders always have `id ≥ 100`.
     used in Message Detail; both must be defined in the OpenAPI spec.
   - **Move to folder** (folder picker dialog) — `POST /api/v1/messages/move` with body
     `{"ids": […], "folder_id": targetFolderId}`. The **Move** action is disabled entirely
-    when the current folder is Drafts or Scheduled (the server rejects such sources with
-    400). The folder picker lists all folders except Scheduled, Snoozed, Drafts, and the
-    current folder (consistent with the Message Detail picker).
-  - **Delete** — `DELETE /api/v1/messages` with `{"ids": […]}`
+    when the current folder is Drafts, Scheduled, or Snoozed (the server rejects messages
+    from those sources with 400). The folder picker lists all folders except Scheduled,
+    Snoozed, Drafts, and the current folder (consistent with the Message Detail picker).
+  - **Delete** — `DELETE /api/v1/messages` with `{"ids": […]}`. Note: the server rejects
+    this request with 400 if any selected message is currently in Scheduled, Snoozed, or
+    Drafts — these folders are excluded from multi-select in any case (see Move restriction
+    above), so this condition should not arise in practice.
 
 Pressing the system Back button while in multi-select mode exits multi-select (same as
 the standard contextual-action-bar Back behaviour on Android).
@@ -366,10 +370,10 @@ the standard contextual-action-bar Back behaviour on Android).
   From, To, Cc, Bcc, Reply-To, Date, Subject. For messages in the Snoozed folder
   (`folder_id == SNOOZED_ID`), additionally show a **Snoozed until** row displaying the
   `snoozed_until` timestamp in the full date format (`EEE, d MMM yyyy, HH:mm z`).
-- **`send_failed` banner:** If the message has `send_failed: true`, show a banner
-  immediately below the header — yellow when `folder_id == SCHEDULED_ID`, red when
-  `folder_id == DRAFTS_ID` (determined from the fetched message object, same colour
-  coding as the Message List badge).
+- **`send_failed` banner:** Show a banner immediately below the header only when
+  `send_failed: true` AND `folder_id` is either `SCHEDULED_ID` (yellow) or `DRAFTS_ID`
+  (red). Hidden in all other folders, including Trash where `send_failed` may be `true`
+  but the message is no longer actionable.
 - **Body section:** displays `body_text` in a `SelectionContainer` with a monospace
   font (plain text only in v1).
 - **Attachments section:** lists all attachments by name and size. Tapping an
@@ -409,7 +413,7 @@ section; any `folder_id ≥ 100` is a user folder and falls in the same row as I
 | Inbox (`folder_id == INBOX_ID`) or user folders (`folder_id ≥ 100`) | Reply, Reply All, Forward, Move, Mark as junk, Delete    |
 | Sent             | Forward, Move, Delete                                                      |
 | Drafts           | Edit (→ Compose), Discard (with confirmation)                              |
-| Scheduled        | Delete (permanent)                                                         |
+| Scheduled        | Cancel scheduled send (→ Drafts)                                           |
 | Snoozed          | Reply, Reply All, Forward, Move, Mark as junk                              |
 | Junk             | Not junk, Move, Delete (permanent)                                         |
 | Trash            | Move, Delete (permanent)                                                   |
@@ -425,16 +429,22 @@ to the message list; the app stays in the current folder (does not navigate to J
 to Inbox server-side; if the previous screen was the Junk message list, it will refresh
 and no longer show the message.
 
-The **Delete** action in Scheduled, Junk, and Trash folders is permanent. Show a
-confirmation dialog before proceeding (same pattern as Discard in Drafts).
+The **Delete** action in Junk and Trash folders is permanent. Show a confirmation dialog
+before proceeding (same pattern as Discard in Drafts).
+
+**Cancel scheduled send** calls `DELETE /scheduled/{id}`, which moves the message to
+Drafts (not permanent deletion — `DELETE /messages/{id}` rejects Scheduled messages with
+400). Show a confirmation dialog before proceeding. On success, call
+`navController.popBackStack()` to return to the Message List and trigger a full list
+refresh.
 
 The **Move** action (single message) calls `POST /api/v1/messages/move` with body
 `{"ids": [id], "folder_id": targetFolderId}` — the same bulk endpoint used in
 multi-select, with a single-element array.
 
-After a successful **Move** or **Delete** from Message Detail, call
-`navController.popBackStack()` to return to the Message List, and trigger a full list
-refresh (reload from offset 0) so the moved or deleted message no longer appears.
+After a successful **Move**, **Delete**, or **Cancel scheduled send** from Message Detail,
+call `navController.popBackStack()` to return to the Message List, and trigger a full
+list refresh (reload from offset 0) so the affected message no longer appears.
 
 
 ---
@@ -461,7 +471,7 @@ Fetch the source message via `GET /api/v1/messages/{id}` and pre-fill fields as 
 
 | Field   | Reply                                              | Reply All                                                                 | Forward          |
 |---------|----------------------------------------------------|---------------------------------------------------------------------------|------------------|
-| To      | Source Reply-To if present, else source From       | Source Reply-To if present, else source From (same as Reply), excluding own identities | (empty)          |
+| To      | Source Reply-To if present, else source From, excluding own identities | Source Reply-To if present, else source From (same as Reply), excluding own identities | (empty)          |
 | Cc      | (empty)                                            | All source To/Cc recipients, excluding own identities                     | (empty)          |
 | Bcc     | (empty)                                            | (empty)                                                                   | (empty)          |
 | Subject | `Re: ` + source subject (suppress duplicate `Re:` prefixes — strip all leading `Re:` prefixes case-insensitively using `^(?i)(re:\s*)+` before prepending `Re: `) | Same as Reply | `Fwd: ` + source subject (suppress duplicate `Fwd:` prefixes — strip all leading `Fwd:` prefixes case-insensitively using `^(?i)(fwd:\s*)+` before prepending `Fwd: `) |
@@ -520,9 +530,12 @@ fields. The auto-save loop then uses `PUT /api/v1/drafts/{id}` from the very fir
 and never calls `POST /api/v1/drafts`.
 
 Start an auto-save coroutine on a 30-second `delay` loop. On first save (new compose),
-call `POST /api/v1/drafts` (without attachments, even if files are already queued
-locally) and store the returned `id`. On subsequent saves call `PUT /api/v1/drafts/{id}`.
-Track a dirty flag; mark dirty on any field edit, clear it after each successful save.
+call `POST /api/v1/drafts` and store the returned `id`. On subsequent saves call
+`PUT /api/v1/drafts/{id}`. Track a dirty flag; mark dirty on any field edit, clear it
+after each successful save. If the first `POST /api/v1/drafts` fails, show a non-blocking
+Snackbar ("Draft could not be saved — will retry"), keep the dirty flag set, and let the
+next loop tick retry the POST. The draft is lost only if the user navigates away before
+any POST succeeds.
 
 Use a `Mutex` (`saveMutex`) to serialise save operations. Both the auto-save loop body
 and the `onCleared()` final-save coroutine must acquire `saveMutex` before checking the
@@ -537,43 +550,43 @@ leaves the back-stack).
 The auto-save request body is a `DraftRequest` JSON object with fields: `identity_id`
 (integer — the ID of the selected identity from the From dropdown), `to_addr` (string),
 `cc_addr` (string), `bcc_addr` (string), `reply_to_addr` (string, may be empty),
-`subject` (string), `body_text` (string). Address fields use RFC 5322 comma-separated
-format for multiple addresses (e.g. `"Alice <a@b.com>, Bob <c@d.com>"`). For Reply and
-Reply-All, also include `in_reply_to` and `references` as described above — these fields
-are present in every save call for the lifetime of the reply draft. It never uploads,
-creates, or deletes attachments; attachments are handled exclusively at send time or via
-immediate-delete for existing draft attachments.
-
-Locally queued attachments are never uploaded during auto-save — they are uploaded only
-at send time.
+`subject` (string), `body_text` (string). The `body_html` and `send_at` fields are
+intentionally omitted — v1 is plain-text only, and scheduled send is out of scope; their
+absence in a PUT causes the server to clear those fields, which is the correct behaviour.
+Address fields use RFC 5322 comma-separated format for multiple addresses
+(e.g. `"Alice <a@b.com>, Bob <c@d.com>"`). For Reply and Reply-All, also include
+`in_reply_to` and `references` as described above — these fields are present in every
+save call for the lifetime of the reply draft. It never uploads, creates, or deletes
+attachments; attachments are handled via immediate upload on file selection (see
+Attachments section) and immediate delete for existing draft attachments.
 
 **Send:**
 Before initiating Send, cancel the running auto-save job. Disable the Send button while
 in flight. If no `draftId` exists yet (the user tapped Send before the first 30-second
 auto-save fired), perform a synchronous `POST /api/v1/drafts` first to obtain one, then
-proceed. If locally queued attachments exist, upload them via
-`PUT /api/v1/drafts-with-attachments/{id}` before calling `/send`. The request is
-`multipart/form-data` with a JSON part named `message` containing a `DraftRequest`
-(same fields as the auto-save body: `identity_id`, `to_addr`, `cc_addr`, `bcc_addr`,
-`reply_to_addr`, `subject`, `body_text`) and one or more file parts named `attachments`.
-Always send via `POST /api/v1/drafts/{id}/send`.
-On 201 navigate back (the draft is consumed by the send operation; the auto-save loop is
-not restarted).
+proceed. Because newly added files are uploaded immediately on selection (not deferred to
+send time), no attachment upload step is needed here. Always send via
+`POST /api/v1/drafts/{id}/send`.
+On 201 or 202, navigate back (the draft is consumed by the send operation; the auto-save
+loop is not restarted). 202 is theoretically unreachable because v1 never sets `send_at`,
+but accepting it is harmless.
 On 400/500 show the server error message inline above the Send button and restart the
 auto-save loop so subsequent edits continue to be auto-saved.
-If the attachment upload (`PUT /api/v1/drafts-with-attachments/{id}`) fails: show the
-error message inline above the Send button; retain the draft ID and locally queued
-attachments so the user can retry; restart the auto-save loop. Do not proceed to `/send`.
 
 **Attachments:**
-Attach files using `ActivityResultContracts.GetMultipleContents`. Store selected file
-URIs locally; upload them when sending (as `multipart/form-data` parts). Remove an
-attachment by tapping the × chip.
+Attach files using `ActivityResultContracts.GetMultipleContents`. Newly added files are
+uploaded **immediately on selection** rather than deferred to send time. Because
+`PUT /api/v1/drafts-with-attachments/{id}` replaces all attachments wholesale, the upload
+request must include ALL currently retained attachments: re-download any existing
+server-side attachments via `GET /api/v1/attachments/{id}` (caching them in the app's
+cache directory is acceptable) and include them alongside the new files as `attachments`
+parts in the same `multipart/form-data` PUT. If no `draftId` exists at file-selection
+time, first call `POST /api/v1/drafts` to obtain one before uploading. Show an inline
+error if the upload fails; the user can retry by tapping a Retry button in the attachments
+area.
 
 For draft edits, existing server-side attachments are shown as removable chips; tapping
-× calls `DELETE /api/v1/drafts/{id}/attachments/{attachment_id}` immediately. Newly
-added files are queued locally and uploaded at send time via
-`PUT /api/v1/drafts-with-attachments/{id}`.
+× calls `DELETE /api/v1/drafts/{id}/attachments/{attachment_id}` immediately.
 
 
 ---
@@ -600,6 +613,9 @@ added files are queued locally and uploaded at send time via
 - Results rendered as a `LazyColumn` of message summaries, each showing the FTS
   `snippet` below the subject.
 - Tapping a result navigates to Message Detail.
+- Long-press is not supported; multi-select is not available on the Search screen (results
+  span multiple folders including restricted ones that the server rejects for bulk
+  operations).
 - Infinite scroll for pagination: same page size and offset increment as the Message
   List (`limit=50`, `offset += 50`). Stop paginating when the returned item count is
   less than 50. A page returning 0 items satisfies this condition and the empty result
@@ -652,7 +668,8 @@ Read-only in v1 — no add, edit, delete, or reorder. Filter editing is deferred
 explicit **Save** button. On enter, call `GET /api/v1/spam-filter` to load the current
 settings into the form fields. Show a loading indicator while fetching; show an inline
 error with a Retry button if the fetch fails. Tapping **Save** calls
-`PUT /api/v1/spam-filter` with the current form values.
+`PUT /api/v1/spam-filter` with the current form values. The `score_threshold` field is
+a floating-point number (e.g. `5.0`); use a decimal-accepting input (not integer-only).
 
 **Contacts tab:** Paginated list via `GET /api/v1/contacts?q=…&limit=50&offset=0`.
 Each contact has a **name** (display name) and an **email address**; the list row shows
