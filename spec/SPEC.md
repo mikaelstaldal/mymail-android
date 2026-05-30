@@ -269,15 +269,16 @@ Register the `mymail://` scheme in `AndroidManifest.xml` with an `<intent-filter
 
 When Message Detail performs an action that removes the current message from the Message
 List (Move, Delete, Mark as junk, Not junk, Cancel scheduled send, Cancel snooze), it
-signals the list to refresh before calling `popBackStack()` by setting a key on the
+signals the previous screen before calling `popBackStack()` by setting keys on the
 previous back-stack entry's `SavedStateHandle`:
 
 ```kotlin
 navController.previousBackStackEntry?.savedStateHandle?.set("needsRefresh", true)
+navController.previousBackStackEntry?.savedStateHandle?.set("removedMessageId", messageId)
 navController.popBackStack()
 ```
 
-The Message List Screen observes this key and triggers a reload from offset 0:
+The Message List Screen observes `needsRefresh` and triggers a reload from offset 0:
 
 ```kotlin
 val needsRefresh by navController.currentBackStackEntry
@@ -293,6 +294,27 @@ LaunchedEffect(needsRefresh) {
     }
 }
 ```
+
+The Search Screen observes `removedMessageId` and removes the affected message locally:
+
+```kotlin
+val removedMessageId by navController.currentBackStackEntry
+    ?.savedStateHandle
+    ?.getStateFlow<Long?>("removedMessageId", null)
+    ?.collectAsState(initial = null)
+    ?: remember { mutableStateOf(null) }
+
+LaunchedEffect(removedMessageId) {
+    removedMessageId?.let { id ->
+        viewModel.removeMessageById(id)
+        navController.currentBackStackEntry?.savedStateHandle?.set("removedMessageId", null)
+    }
+}
+```
+
+Both keys are always set before `popBackStack()`, regardless of which screen is below
+in the back-stack. The Message List only observes `needsRefresh`; Search only observes
+`removedMessageId`. Each screen ignores the key it does not use.
 
 
 ---
@@ -319,7 +341,11 @@ User-created folders always have `id ≥ 100`.
 
 ## Folder List Screen
 
-- Fetches `GET /api/v1/folders` on enter and on pull-to-refresh.
+- Fetches `GET /api/v1/folders` on enter, whenever the screen becomes the current
+  destination again (e.g. after back-navigation from a sub-screen), and on pull-to-refresh.
+  Implement by observing the `NavBackStackEntry` lifecycle state: re-fetch when the entry
+  transitions to `RESUMED` (i.e. `Lifecycle.State.RESUMED`). This keeps unread counts
+  current after reading messages or mark-all-read operations.
 - **Error state:** If the fetch fails, show a centred error message with a Retry button.
   While the error state is shown, the list is empty. The network-error Snackbar (see
   Error Handling table) also fires.
@@ -365,7 +391,8 @@ User-created folders always have `id ≥ 100`.
 - Pull-to-refresh reloads from offset 0. Refresh replaces the entire in-memory list
   with only the first page result; previously loaded pages beyond page 1 are discarded.
 - **Mark all as read** action in the overflow menu (visible in normal mode only; hidden
-  while multi-select is active) calls `POST /api/v1/folders/{folder_id}/mark-all-read`.
+  while multi-select is active; shown for all folders **except Drafts and Scheduled** where
+  the read state is not meaningful) calls `POST /api/v1/folders/{folder_id}/mark-all-read`.
   On success, mark all currently loaded message rows as read locally (update their visual
   style without reloading from the server) and update the folder's unread-count badge to 0.
   New pages loaded via infinite scroll after a mark-all-read will have `read: true` from
@@ -386,6 +413,9 @@ User-created folders always have `id ≥ 100`.
   - **Mark read / unread** — `PATCH /api/v1/messages` with `{"ids": […], "read": true/false}`.
     This bulk endpoint is distinct from the single-message `PATCH /api/v1/messages/{id}`
     used in Message Detail; both must be defined in the OpenAPI spec.
+    **Toggle logic:** if at least one selected message is unread, send `"read": true` (mark
+    all as read); only when every selected message is already read, send `"read": false`
+    (mark all as unread).
     On success, update the read state of the affected rows locally. On 400 or 404, show a
     Snackbar with the server error message; no local changes are made.
   - **Move to folder** (folder picker dialog) — `POST /api/v1/messages/move` with body
@@ -394,7 +424,10 @@ User-created folders always have `id ≥ 100`.
     Message Detail picker). On success, remove the affected rows from the list and exit
     multi-select. On 400 or 404, show a Snackbar with the server error message; no local
     changes are made.
-  - **Delete** — `DELETE /api/v1/messages` with `{"ids": […]}`. On success, remove the
+  - **Delete** — `DELETE /api/v1/messages` with `{"ids": […]}`. When the current folder is
+    Trash or Junk, deletion is permanent — show a confirmation dialog before proceeding
+    (consistent with single-message Delete in those folders). For all other folders,
+    messages are moved to Trash and no confirmation is required. On success, remove the
     affected rows from the list and exit multi-select. On 400 or 404, show a Snackbar
     with the server error message; no local changes are made.
 
@@ -419,7 +452,9 @@ Back behaviour on Android).
   collapsed header row; a trailing chevron icon indicates the expand/collapse state):
   From, To, Cc, Bcc, Reply-To, Date, Subject. For messages in the Snoozed folder
   (`folder_id == SNOOZED_ID`), additionally show a **Snoozed until** row displaying the
-  `snoozed_until` timestamp in the full date format (`EEE, d MMM yyyy, HH:mm z`).
+  `snoozed_until` timestamp in the full date format (`EEE, d MMM yyyy, HH:mm z`). If
+  `snoozed_until` is null (should not occur for correctly-stored Snoozed messages, but
+  handled defensively), omit the row entirely.
 - **`send_failed` banner:** Show a banner immediately below the header only when
   `send_failed: true` AND `folder_id` is either `SCHEDULED_ID` (yellow) or `DRAFTS_ID`
   (red). Hidden in all other folders, including Trash where `send_failed` may be `true`
@@ -491,8 +526,13 @@ full list refresh so the discarded draft no longer appears. On 404 (draft was al
 discarded from another client — race condition), show a Snackbar ("Draft already
 discarded") and call `navController.popBackStack()`.
 
-The **Delete** action in Junk and Trash folders is permanent. Show a confirmation dialog
-before proceeding (same pattern as Discard in Drafts).
+The **Delete** action for Inbox, user folders, and Sent calls `DELETE /api/v1/messages/{id}`,
+which moves the message to Trash (non-permanent). No confirmation dialog is required — the
+action is reversible by visiting Trash.
+
+The **Delete** action in Junk and Trash folders is permanent: it calls `DELETE /api/v1/messages/{id}`,
+which permanently removes the message immediately. Show a confirmation dialog before proceeding
+(same pattern as Discard in Drafts).
 
 **Cancel scheduled send** calls `DELETE /api/v1/scheduled/{id}`, which moves the message to
 Drafts (not permanent deletion — `DELETE /api/v1/messages/{id}` rejects Scheduled messages with
@@ -533,11 +573,11 @@ Supports new mail, reply, reply-all, forward, and draft editing.
 | Field      | Notes                                                                          |
 |------------|--------------------------------------------------------------------------------|
 | From       | `DropdownMenu` populated from `GET /api/v1/identities`. For new compose, pre-select the identity with `is_default: true`. For Reply/Reply-All, pre-select the identity whose address matches a To or Cc address of the source message; fall back to the default identity if no match is found. |
-| To         | Chip text field with autocomplete from `GET /api/v1/contacts?q=…&limit=10`. Autocomplete fires after the user types at least 1 character, debounced at 300 ms. When the text input is cleared, close the dropdown and show no suggestions. When the query returns no contacts, close the dropdown (no "no results" item). Maximum 8192 characters (RFC 5322 comma-separated addresses). |
+| To         | Chip text field with autocomplete from `GET /api/v1/contacts?q=…&limit=10`. Autocomplete fires after the user types at least 1 character, debounced at 300 ms. When the text input is cleared, close the dropdown and show no suggestions. When the query returns no contacts, close the dropdown (no "no results" item). Maximum 8192 characters (RFC 5322 comma-separated addresses) — enforce as a hard cap (stop accepting input at the limit). |
 | Cc         | Same as To (collapsed by default, expand via button)                           |
 | Bcc        | Same as To (collapsed by default)                                              |
-| Reply-To   | Single plain text field (optional, collapsed by default). Maximum 8192 characters. |
-| Subject    | Single-line text field. Maximum 998 characters.                                |
+| Reply-To   | Single plain text field (optional, collapsed by default). Maximum 8192 characters — hard cap. |
+| Subject    | Single-line text field. Maximum 998 characters — hard cap.                     |
 | Body       | Multi-line plain text field (`OutlinedTextField`, v1 is plain text only)       |
 | Attachments| List of attached files; **Add attachment** button opens the system file picker |
 
@@ -545,8 +585,9 @@ Supports new mail, reply, reply-all, forward, and draft editing.
 Fetch the source message (`GET /api/v1/messages/{id}`) and identities
 (`GET /api/v1/identities`) in parallel. While the fetches are in-flight, show a circular
 progress indicator over disabled/blank fields. If either fetch fails, show a centred error
-with a Retry button and do not populate any fields until both succeed. Pre-fill fields as
-follows:
+with a Retry button and do not populate any fields until both succeed. The auto-save loop
+must not start until both fetches succeed — starting before pre-population would save empty
+or partially filled fields as the first draft version. Pre-fill fields as follows:
 
 | Field   | Reply                                              | Reply All                                                                 | Forward          |
 |---------|----------------------------------------------------|---------------------------------------------------------------------------|------------------|
@@ -574,7 +615,7 @@ On <date>, <from address> wrote:
 ```
 ---------- Forwarded message ----------
 From: <source From>
-Date: <source Date>
+Date: <source Date formatted as RFC 1123, same as reply attribution>
 Subject: <source Subject>
 To: <source To>
 
@@ -590,12 +631,19 @@ standard email signature delimiter followed by the signature text:
 \n\n-- \n<signature>
 ```
 
-For new compose the body starts as just the signature block (the user types above it).
+For new compose the body starts as just the signature block (the user types above it):
+`\n\n-- \n<signature>`. The leading `\n\n` provides two blank lines at the top.
+
 For reply/reply-all and forward, the signature is appended after the quoted/forwarded block:
 
 ```
 \n\n<attribution or forwarded headers block>\n\n-- \n<signature>
 ```
+
+The leading `\n\n` provides two blank lines at the top where the user types their response;
+the cursor is positioned at offset 0. When the identity has an empty signature, the initial
+body for reply/reply-all/forward is just `\n\n` + the attribution/forwarded block (no
+delimiter appended).
 
 When the selected identity has an empty signature, no delimiter or signature text is
 appended. When the user changes the From identity after the screen opens, the signature
@@ -603,7 +651,10 @@ block at the bottom of the body is replaced with the new identity's signature (o
 if the new identity has no signature). Only the trailing signature block is replaced; any
 text the user has typed above it is preserved. Track the current signature string so the
 replacement can be found precisely by searching for `\n\n-- \n<currentSignature>` at the
-end of the body string.
+end of the body string. When the initial identity had an empty signature (so no delimiter
+was ever appended) and the user switches to an identity with a non-empty signature, there
+is no existing `\n\n-- \n` to search for; in that case simply append `\n\n-- \n<newSignature>`
+at the end of the body.
 
 For Forward, pass `source_message_id` in the initial `POST /api/v1/drafts` body so the
 server copies attachments at draft-creation time. `source_message_id` is included only
@@ -642,10 +693,13 @@ subsequent user edits mark the draft dirty. The auto-save loop then uses
 Start an auto-save coroutine on a 30-second `delay` loop. On first save (new compose),
 call `POST /api/v1/drafts` and store the returned `id`. On subsequent saves call
 `PUT /api/v1/drafts/{id}`. Track a dirty flag; mark dirty on any field edit, clear it
-after each successful save. If the first `POST /api/v1/drafts` fails, show a non-blocking
-Snackbar ("Draft could not be saved — will retry"), keep the dirty flag set, and let the
-next loop tick retry the POST. The draft is lost only if the user navigates away before
-any POST succeeds.
+after each successful save. If the first `POST /api/v1/drafts` fails, show a non-blocking informational Snackbar
+("Draft could not be saved — will retry") with no Retry action button — the auto-save loop
+retries automatically at the next tick. Keep the dirty flag set and let the next loop tick
+retry the POST. For Forward mode, `source_message_id` must be included in every retry
+attempt of the initial `POST` — it is only omitted from subsequent `PUT` calls once the
+`POST` has succeeded. The draft is lost only if the user navigates away before any POST
+succeeds.
 
 Use a `Mutex` (`saveMutex`) to serialise save operations. Both the auto-save loop body
 and the `onCleared()` final-save coroutine must acquire `saveMutex` before checking the
@@ -662,10 +716,13 @@ is needed for v1.
 The auto-save request body is a `DraftRequest` JSON object with fields: `identity_id`
 (integer — the ID of the selected identity from the From dropdown), `to_addr` (string),
 `cc_addr` (string), `bcc_addr` (string), `reply_to_addr` (string, may be empty),
-`subject` (string), `body_text` (string). For Reply and Reply-All, also include
-`in_reply_to` and `references` as described above — these fields are present in every
-save call (both `POST` and every `PUT`) for the lifetime of the reply draft. For all
-other modes (new compose, Forward, draft edit), omit `in_reply_to` and `references`.
+`subject` (string), `body_text` (string). For Reply and Reply-All (live session), also
+include `in_reply_to` and `references` as described above — these fields are present in
+every save call (both `POST` and every `PUT`) for the lifetime of the reply draft. For
+draft edit mode (`compose?draftId={id}`), read `in_reply_to` and `references` from the
+fetched `MessageDetail` response and include them in every save call if non-empty — this
+preserves threading fields that were set when the draft was originally created as a reply.
+For new compose and Forward modes, omit `in_reply_to` and `references`.
 The `body_html` and `send_at` fields are intentionally omitted — v1 is plain-text only,
 and scheduled send is out of scope; their absence in a PUT causes the server to clear
 those fields, which is the correct behaviour. Address fields use RFC 5322
@@ -676,7 +733,10 @@ subsequent `PUT` calls for Forward omit it. No auto-save status indicator is sho
 the user; the only auto-save feedback is the failure Snackbar ("Draft could not be
 saved — will retry"). It never uploads, creates, or deletes attachments; attachments
 are handled via immediate upload on file selection (see Attachments section) and
-immediate delete for existing draft attachments.
+immediate delete for existing draft attachments. Note: `PUT /api/v1/drafts/{id}` does
+not modify existing attachment rows — they are preserved and only replaced wholesale via
+`PUT /api/v1/drafts-with-attachments/{id}`. This means the auto-save loop running
+concurrently with an attachment upload will not overwrite any uploaded attachments.
 
 **Send:**
 The Send button is disabled when all three recipient fields (To, Cc, Bcc) are empty;
@@ -754,6 +814,11 @@ For draft edits, existing server-side attachments are shown as removable chips; 
   bold using `AnnotatedString` with `SpanStyle(fontWeight = FontWeight.Bold)`; strip the
   `**` delimiters from the displayed text.
 - Tapping a result navigates to Message Detail.
+- When returning from Message Detail after a destructive action (Delete, Move, Discard,
+  Mark as junk, etc.), the Search screen observes the `removedMessageId` key on its
+  `SavedStateHandle` (set by Message Detail before `popBackStack()`) and removes the
+  affected message from the in-memory results list without re-fetching. See the
+  [Navigation results for list refresh](#navigation-results-for-list-refresh) section.
 - Long-press is not supported; multi-select is not available on the Search screen (results
   span multiple folders including restricted ones that the server rejects for bulk
   operations).
@@ -782,9 +847,9 @@ A `TabRow` with six tabs, mirroring the web UI:
 | Preferences  | App-level preferences (see below)                  |
 
 **Identities tab:** Fetches `GET /api/v1/identities` on enter. Show an inline error with
-a Retry button if the fetch fails. Read-only list of identities ordered by position, then
-id; each row shows name and address. Identity management (create, edit, delete, set
-default) is out of scope for v1.
+a Retry button if the fetch fails. The API returns identities already ordered by position,
+then id; display them in the server-returned order. Each row shows name and address.
+Identity management (create, edit, delete, set default) is out of scope for v1.
 
 **Folders tab:** Fetches `GET /api/v1/folders` on enter. Show an inline error with a
 Retry button if the fetch fails. Only user-created folders (id ≥ 100) can be renamed or
@@ -810,7 +875,9 @@ and a one-line summary on the second line. Build the summary as follows:
 
 - **Condition part:** list every non-empty match field joined with " AND ":
   `from contains '<value>'`, `to contains '<value>'`, `subject contains '<value>'`.
-  Example: `from contains 'newsletter@' AND subject contains 'weekly'`
+  Example: `from contains 'newsletter@' AND subject contains 'weekly'`. If all three
+  match fields are empty (not possible via v1's read-only UI, but defensive handling for
+  legacy data), display the condition as "(matches all)".
 - **Action part:** map the `action` enum to a friendly string:
   - `move` → `Move to <folder name>` (look up the folder name from the same folder list
     fetched for the Folders tab; if the folder is not found, fall back to
@@ -828,11 +895,14 @@ the same `GET /api/v1/folders` call as the Folders tab. Fetch this list on tab e
 (shared with the Folders tab; one request is sufficient if both tabs are displayed in the
 same settings session).
 
-**Spam tab:** Toggle plus two text fields for score header name and threshold, and an
-explicit **Save** button. On enter, call `GET /api/v1/spam-filter` to load the current
-settings into the form fields. Show a loading indicator while fetching; show an inline
-error with a Retry button if the fetch fails. Tapping **Save** calls
-`PUT /api/v1/spam-filter` with the current form values. The `score_threshold` field is
+**Spam tab:** Toggle (`enabled` boolean field) plus two text fields for score header name
+(`score_header`) and threshold (`score_threshold`), and an explicit **Save** button. On
+enter, call `GET /api/v1/spam-filter` to load the current settings into the form fields.
+Show a loading indicator while fetching; show an inline error with a Retry button if the
+fetch fails. Tapping **Save** calls `PUT /api/v1/spam-filter` with the current form values.
+On success, show a brief informational Snackbar ("Settings saved"). On 400, show the server
+error message inline near the relevant field.
+The `score_threshold` field is
 a non-negative floating-point number (`minimum: 0`; a value of `0` means "match any
 message whose score header parses as a number"); use a decimal-accepting input (not
 integer-only). The `score_header` field must be non-empty after trimming.
@@ -851,7 +921,8 @@ discard previously loaded results before issuing a new request. Infinite scroll 
 less than 50. Tapping a contact opens an edit dialog; a **+** FAB creates a new contact.
 Both add and edit dialogs have Name (optional) and Email (required, RFC 5322 addr-spec)
 fields. On 409 Conflict (duplicate address), show the server error message inline in the
-dialog. Add / edit / delete. Mutation endpoints:
+dialog. Deleting a contact shows a confirmation dialog before calling
+`DELETE /api/v1/contacts/{id}`. Add / edit / delete. Mutation endpoints:
 
 | Operation | Endpoint                          |
 |-----------|-----------------------------------|
