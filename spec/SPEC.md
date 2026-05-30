@@ -470,6 +470,10 @@ refresh. The message is moved to Inbox server-side; the refresh removes it from 
 Junk message list. On 400 (message is no longer in Junk — race condition),
 show a Snackbar with the server error message.
 
+**Discard** calls `DELETE /api/v1/drafts/{id}` after a confirmation dialog. On 204
+success, call `navController.popBackStack()` to return to the Message List and trigger a
+full list refresh so the discarded draft no longer appears.
+
 The **Delete** action in Junk and Trash folders is permanent. Show a confirmation dialog
 before proceeding (same pattern as Discard in Drafts).
 
@@ -492,7 +496,7 @@ The **Move** action (single message) calls `POST /api/v1/messages/move` with bod
 `{"ids": [id], "folder_id": targetFolderId}` — the same bulk endpoint used in
 multi-select, with a single-element array.
 
-After a successful **Move**, **Delete**, **Mark as junk**, **Not junk**, **Cancel
+After a successful **Move**, **Delete**, **Discard**, **Mark as junk**, **Not junk**, **Cancel
 scheduled send**, or **Cancel snooze** from Message Detail, call
 `navController.popBackStack()` to return to the Message List and trigger a full list
 refresh (reload from offset 0) so the affected message no longer appears. Use the
@@ -555,6 +559,30 @@ To: <source To>
 
 <source body>
 ```
+
+**Signature pre-population:**
+The selected identity's `signature` field is appended to the initial body in all compose
+modes (new, reply, reply-all, forward). When the signature is non-empty, append the
+standard email signature delimiter followed by the signature text:
+
+```
+\n\n-- \n<signature>
+```
+
+For new compose the body starts as just the signature block (the user types above it).
+For reply/reply-all and forward, the signature is appended after the quoted/forwarded block:
+
+```
+\n\n<attribution or forwarded headers block>\n\n-- \n<signature>
+```
+
+When the selected identity has an empty signature, no delimiter or signature text is
+appended. When the user changes the From identity after the screen opens, the signature
+block at the bottom of the body is replaced with the new identity's signature (or removed
+if the new identity has no signature). Only the trailing signature block is replaced; any
+text the user has typed above it is preserved. Track the current signature string so the
+replacement can be found precisely by searching for `\n\n-- \n<currentSignature>` at the
+end of the body string.
 
 For Forward, pass `source_message_id` in the initial `POST /api/v1/drafts` body so the
 server copies attachments at draft-creation time. `source_message_id` is included only
@@ -641,15 +669,21 @@ uploaded **immediately on selection** rather than deferred to send time. Because
 request must include ALL currently retained attachments: re-download any existing
 server-side attachments via `GET /api/v1/attachments/{id}` (caching them in the app's
 cache directory is acceptable) and include them alongside the new files as `attachments`
-parts in the same `multipart/form-data` PUT. While re-downloading, show a loading
-indicator in the attachments area. If any re-download fails, show an inline error with a
-Retry button in the attachments area and abort the upload. If no `draftId` exists at file-selection
-time, acquire `saveMutex` and, if `draftId` is still null inside the lock, call
-`POST /api/v1/drafts` with the current form field values (same request body as the
-auto-save) to obtain one; release the lock before proceeding with the upload. Acquiring
-`saveMutex` here prevents the auto-save loop from creating a duplicate draft
-simultaneously. Show an inline error if the upload fails; the user can retry by tapping
-a Retry button in the attachments area.
+parts in the same `multipart/form-data` PUT. Each re-uploaded attachment part must use
+the `filename` from `AttachmentMeta` as the `Content-Disposition` filename and the
+`content_type` from `AttachmentMeta` as the part's `Content-Type`. Note that
+`PUT /api/v1/drafts-with-attachments/{id}` also replaces draft content (same as
+`PUT /api/v1/drafts/{id}`), so the `message` part of the multipart request must always
+contain the current form field values (same `DraftRequest` body as the auto-save) in
+addition to the `attachments` parts; omitting the `message` part clears all draft text
+fields. While re-downloading, show a loading indicator in the attachments area. If any
+re-download fails, show an inline error with a Retry button in the attachments area and
+abort the upload. If no `draftId` exists at file-selection time, acquire `saveMutex` and,
+if `draftId` is still null inside the lock, call `POST /api/v1/drafts` with the current
+form field values (same request body as the auto-save) to obtain one; release the lock
+before proceeding with the upload. Acquiring `saveMutex` here prevents the auto-save loop
+from creating a duplicate draft simultaneously. Show an inline error if the upload fails;
+the user can retry by tapping a Retry button in the attachments area.
 
 For draft edits, existing server-side attachments are shown as removable chips; tapping
 × calls `DELETE /api/v1/drafts/{id}/attachments/{attachment_id}` immediately.
@@ -677,7 +711,10 @@ For draft edits, existing server-side attachments are shown as removable chips; 
   previously loaded results before issuing a new request. Pull-to-refresh reloads from
   offset 0 with the current filters applied.
 - Results rendered as a `LazyColumn` of message summaries, each showing the FTS
-  `snippet` below the subject.
+  `snippet` below the subject. The snippet contains matched keywords surrounded by `**`
+  markers (e.g. `…the **keyword** in…`). Parse these markers and render matched terms in
+  bold using `AnnotatedString` with `SpanStyle(fontWeight = FontWeight.Bold)`; strip the
+  `**` delimiters from the displayed text.
 - Tapping a result navigates to Message Detail.
 - Long-press is not supported; multi-select is not available on the Search screen (results
   span multiple folders including restricted ones that the server rejects for bulk
