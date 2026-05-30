@@ -157,7 +157,9 @@ generated files; they are regenerated on every clean build.
   request**; API interface instances must not be cached at field-initialisation time, since
   `holder.get()` may return a different `Retrofit` after a `rebuild()`. When the user
   changes the server URL in Setup, `RetrofitHolder.rebuild()` atomically replaces the inner
-  `Retrofit` instance.
+  `Retrofit` instance. Requests in-flight at the moment of `rebuild()` continue to
+  completion using the prior instance and are handled normally; no special cancellation
+  is required.
 - A single `OkHttpClient` is shared. It has:
   - `BasicAuthInterceptor` — adds `Authorization: Basic …` from `CredentialStore`.
   - `ConnectTimeout` / `ReadTimeout` / `WriteTimeout`: 30 seconds each.
@@ -263,6 +265,35 @@ Register the `mymail://` scheme in `AndroidManifest.xml` with an `<intent-filter
 </intent-filter>
 ```
 
+### Navigation results for list refresh
+
+When Message Detail performs an action that removes the current message from the Message
+List (Move, Delete, Mark as junk, Not junk, Cancel scheduled send, Cancel snooze), it
+signals the list to refresh before calling `popBackStack()` by setting a key on the
+previous back-stack entry's `SavedStateHandle`:
+
+```kotlin
+navController.previousBackStackEntry?.savedStateHandle?.set("needsRefresh", true)
+navController.popBackStack()
+```
+
+The Message List Screen observes this key and triggers a reload from offset 0:
+
+```kotlin
+val needsRefresh by navController.currentBackStackEntry
+    ?.savedStateHandle
+    ?.getStateFlow("needsRefresh", false)
+    ?.collectAsState(initial = false)
+    ?: remember { mutableStateOf(false) }
+
+LaunchedEffect(needsRefresh) {
+    if (needsRefresh == true) {
+        viewModel.refresh()
+        navController.currentBackStackEntry?.savedStateHandle?.set("needsRefresh", false)
+    }
+}
+```
+
 
 ---
 
@@ -290,7 +321,8 @@ User-created folders always have `id ≥ 100`.
 
 - Fetches `GET /api/v1/folders` on enter and on pull-to-refresh.
 - **Error state:** If the fetch fails, show a centred error message with a Retry button.
-  While the error state is shown, the list is empty. The generic Snackbar also fires.
+  While the error state is shown, the list is empty. The network-error Snackbar (see
+  Error Handling table) also fires.
 - Renders a `LazyColumn` of folder rows. Each row shows name and `unread_count` badge.
 - Unread counts are shown in a coloured chip. The launcher icon badge count is derived
   automatically from active notifications posted to the `mymail_new_mail` channel
@@ -327,13 +359,16 @@ User-created folders always have `id ≥ 100`.
   before pagination stops; this is intentional.
 - **Empty state:** When the initial load returns 0 items, show a centred "No messages"
   text. **Error state on initial load:** Show a centred error message with a Retry
-  button (the generic Snackbar still fires; the inline Retry is additional).
+  button (the network-error Snackbar still fires; the inline Retry is additional).
 - Pull-to-refresh reloads from offset 0. Refresh replaces the entire in-memory list
   with only the first page result; previously loaded pages beyond page 1 are discarded.
 - **Mark all as read** action in the overflow menu (visible in normal mode only; hidden
   while multi-select is active) calls `POST /api/v1/folders/{folder_id}/mark-all-read`.
   On success, mark all currently loaded message rows as read locally (update their visual
   style without reloading from the server) and update the folder's unread-count badge to 0.
+  New pages loaded via infinite scroll after a mark-all-read will have `read: true` from
+  the server (the operation marks all messages atomically), so no visual inconsistency
+  occurs for pages not yet in memory.
 - **Empty folder** action (Trash and Junk only) calls
   `DELETE /api/v1/folders/{folder_id}/messages` after a confirmation dialog.
 - Multi-select mode is not available in Drafts, Scheduled, or Snoozed folders — long-press
@@ -364,7 +399,8 @@ the standard contextual-action-bar Back behaviour on Android).
   `PATCH /api/v1/messages/{id}` with `{"read": true}` to mark as read. On 200, update
   the `read` flag in the locally held `MessageDetail` — the endpoint returns a
   `MessageSummary` (no body text), so no re-fetch is needed and the already-loaded
-  detail continues to be displayed.
+  detail continues to be displayed. Errors from this PATCH (network failure, 4xx, 5xx)
+  are silently ignored — the message detail remains displayed unchanged.
 - **Header section** (collapsed by default, expandable by tapping anywhere on the
   collapsed header row; a trailing chevron icon indicates the expand/collapse state):
   From, To, Cc, Bcc, Reply-To, Date, Subject. For messages in the Snoozed folder
@@ -419,17 +455,19 @@ section; any `folder_id ≥ 100` is a user folder and falls in the same row as I
 | Trash            | Move, Delete (permanent)                                                   |
 
 **Move** opens a folder picker bottom sheet (lists all folders except Scheduled,
-Snoozed, Drafts, and the current folder).
+Snoozed, Drafts, and the current folder, where "current folder" is the message's
+`folder_id` field — not the folder the user navigated from).
 
-**Mark as junk** calls `POST /api/v1/messages/{id}/mark-junk`. On success navigate back
-to the message list; the app stays in the current folder (does not navigate to Junk).
+**Mark as junk** calls `POST /api/v1/messages/{id}/mark-junk`. On success call
+`navController.popBackStack()` to return to the Message List and trigger a full list
+refresh; the app stays in the current folder (does not navigate to Junk).
 On 400 (message is already in Junk, or is in Drafts, Scheduled, or Snoozed — race condition),
 show a Snackbar with the server error message.
 
 **Not junk** calls `POST /api/v1/messages/{id}/mark-not-junk`. On success call
-`navController.popBackStack()` to return to the previous screen. The message is moved
-to Inbox server-side; if the previous screen was the Junk message list, it will refresh
-and no longer show the message. On 400 (message is no longer in Junk — race condition),
+`navController.popBackStack()` to return to the previous screen and trigger a full list
+refresh. The message is moved to Inbox server-side; the refresh removes it from the
+Junk message list. On 400 (message is no longer in Junk — race condition),
 show a Snackbar with the server error message.
 
 The **Delete** action in Junk and Trash folders is permanent. Show a confirmation dialog
@@ -454,10 +492,11 @@ The **Move** action (single message) calls `POST /api/v1/messages/move` with bod
 `{"ids": [id], "folder_id": targetFolderId}` — the same bulk endpoint used in
 multi-select, with a single-element array.
 
-After a successful **Move**, **Delete**, **Cancel scheduled send**, or **Cancel snooze**
-from Message Detail, call `navController.popBackStack()` to return to the Message List,
-and trigger a full list refresh (reload from offset 0) so the affected message no longer
-appears.
+After a successful **Move**, **Delete**, **Mark as junk**, **Not junk**, **Cancel
+scheduled send**, or **Cancel snooze** from Message Detail, call
+`navController.popBackStack()` to return to the Message List and trigger a full list
+refresh (reload from offset 0) so the affected message no longer appears. Use the
+navigation result mechanism described in [Navigation results for list refresh](#navigation-results-for-list-refresh).
 
 
 ---
@@ -480,7 +519,10 @@ Supports new mail, reply, reply-all, forward, and draft editing.
 | Attachments| List of attached files; **Add attachment** button opens the system file picker |
 
 **Pre-population for Reply / Reply All / Forward:**
-Fetch the source message via `GET /api/v1/messages/{id}` and pre-fill fields as follows:
+Fetch the source message (`GET /api/v1/messages/{id}`) and identities
+(`GET /api/v1/identities`) in parallel. If either fetch fails, show a centred error with
+a Retry button and do not populate any fields until both succeed. Pre-fill fields as
+follows:
 
 | Field   | Reply                                              | Reply All                                                                 | Forward          |
 |---------|----------------------------------------------------|---------------------------------------------------------------------------|------------------|
@@ -525,8 +567,8 @@ and repeat them in every subsequent `PUT /api/v1/drafts/{id}`:
   if `message_id` is null).
 - `references`: the source message's `references` list with `<{source.message_id}>`
   appended (note: `MessageDetail.message_id` has no angle brackets, so wrap it when
-  appending). Omit the field if both the source `references` list is empty and
-  `message_id` is null.
+  appending). No deduplication — append unconditionally. Omit the field if both the
+  source `references` list is empty and `message_id` is null.
 
 **Auto-save:**
 When the screen opens via `compose?draftId={id}`, initialise the ViewModel's `draftId`
@@ -539,8 +581,9 @@ against the fetched identities list (case-insensitive address comparison); if no
 matches, pre-select the default identity. If this fetch fails, show a
 centred error message with a Retry button and do not start the auto-save loop until the
 fetch succeeds — this prevents the loop from overwriting the server draft with blank
-fields. The auto-save loop then uses `PUT /api/v1/drafts/{id}` from the very first save
-and never calls `POST /api/v1/drafts`.
+fields. Pre-populating fields from the fetched draft does not set the dirty flag; only
+subsequent user edits mark the draft dirty. The auto-save loop then uses
+`PUT /api/v1/drafts/{id}` from the very first save and never calls `POST /api/v1/drafts`.
 
 Start an auto-save coroutine on a 30-second `delay` loop. On first save (new compose),
 call `POST /api/v1/drafts` and store the returned `id`. On subsequent saves call
@@ -558,7 +601,9 @@ mid-flight and `onCleared()` runs immediately after.
 If the user navigates away before saving, cancel any in-flight auto-save and, in
 `ComposeViewModel.onCleared()`, launch a coroutine with `NonCancellable` context to
 perform a final save if the dirty flag is set (ViewModel is cleared when the screen
-leaves the back-stack).
+leaves the back-stack). Note: `onCleared()` is not called when the OS kills the process
+under memory pressure; unsaved draft state is lost in that case. No recovery mechanism
+is needed for v1.
 
 The auto-save request body is a `DraftRequest` JSON object with fields: `identity_id`
 (integer — the ID of the selected identity from the From dropdown), `to_addr` (string),
@@ -585,7 +630,9 @@ On 201 or 202, navigate back (the draft is consumed by the send operation; the a
 loop is not restarted). 202 is theoretically unreachable because v1 never sets `send_at`,
 but accepting it is harmless.
 On 400/500 show the server error message inline above the Send button and restart the
-auto-save loop so subsequent edits continue to be auto-saved.
+auto-save loop so subsequent edits continue to be auto-saved. If a `draftId` was obtained
+via a synchronous `POST /api/v1/drafts` immediately before the send attempt, it is
+retained; the restarted auto-save loop uses `PUT /api/v1/drafts/{id}` from that point on.
 
 **Attachments:**
 Attach files using `ActivityResultContracts.GetMultipleContents`. Newly added files are
@@ -594,7 +641,9 @@ uploaded **immediately on selection** rather than deferred to send time. Because
 request must include ALL currently retained attachments: re-download any existing
 server-side attachments via `GET /api/v1/attachments/{id}` (caching them in the app's
 cache directory is acceptable) and include them alongside the new files as `attachments`
-parts in the same `multipart/form-data` PUT. If no `draftId` exists at file-selection
+parts in the same `multipart/form-data` PUT. While re-downloading, show a loading
+indicator in the attachments area. If any re-download fails, show an inline error with a
+Retry button in the attachments area and abort the upload. If no `draftId` exists at file-selection
 time, acquire `saveMutex` and, if `draftId` is still null inside the lock, call
 `POST /api/v1/drafts` with the current form field values (same request body as the
 auto-save) to obtain one; release the lock before proceeding with the upload. Acquiring
@@ -714,7 +763,8 @@ Contacts are returned ordered by name (empty names last), then address. Each con
 a **name** (display name) and an **email address**; the list row shows the name on the
 first line and the email on the second line. Show an inline error with a Retry button if
 the initial fetch fails; if a subsequent infinite-scroll page fetch fails, show an inline
-error with a Retry button at the bottom of the list. Search field filters via `q=`;
+error with a Retry button at the bottom of the list (retries the same page at the failed
+`offset`, not a full reload from offset 0). Search field filters via `q=`;
 keystrokes are debounced with a 300 ms delay before issuing a request. When the query
 changes, reset `offset` to 0 and discard previously loaded results before issuing a new
 request. Infinite scroll with `offset += 50`; stop paginating when the returned count is
@@ -760,7 +810,10 @@ behaviour — the first poll after recreation does not fire a notification. The 
 in-memory baseline (reset on each app launch); no notification fires on that first
 result. On every subsequent poll, when the Inbox `unread_count` is higher than the
 previous value, fire an Android notification (if permission granted and preference
-enabled) and update the unread badge.
+enabled) and update the unread badge. If a poll fails (network error or non-401 HTTP
+error), log the failure and continue — no UI is shown, and the next 30-second tick
+retries automatically. A 401 response is handled by the `AuthEventBus` path (see
+Authentication section) and is not specific to the poller.
 
 ### Background polling
 
@@ -817,18 +870,20 @@ screen, and again on app cold-start if credentials are already stored, using
 `ExistingPeriodicWorkPolicy.KEEP` so duplicate enqueues are no-ops and it survives
 app restarts.
 
-If the worker receives HTTP 401: post a notification on the `mymail_new_mail` channel
-with title = "Session expired" and body = "Tap to sign in again". Use `NavDeepLinkBuilder` with the `mymail://setup`
-deep-link URI to navigate to the Setup screen. Then cancel the periodic work request
-so polling stops until the user re-authenticates (the worker is re-enqueued after a
-successful Setup).
+If the worker receives HTTP 401: cancel the periodic work request so polling stops until
+the user re-authenticates (the worker is re-enqueued after a successful Setup). If
+`isAppInForeground` is false, also post a notification on the `mymail_new_mail` channel
+with title = "Session expired" and body = "Tap to sign in again", using
+`NavDeepLinkBuilder` with the `mymail://setup` deep-link URI. If `isAppInForeground` is
+true, skip posting the notification — the `AuthEventBus` path in `MainActivity` handles
+navigation to Setup for the foreground case.
 
 Clear all posted new-mail notifications, reset the persisted unread-count baseline in
 `SharedPreferences` (`"inbox_unread_count"` key in `"mymail_prefs"`), and reset the
 in-memory foreground-poller baseline when the Inbox `MessageListScreen` composable
-enters composition. Implement via `LaunchedEffect(Unit)` in the Inbox message list
-composable — this fires on every composition of the Inbox screen (forward navigation,
-Back navigation into it, and after rotation).
+enters composition. Implement via `LaunchedEffect(Unit)` in the Inbox message list composable — this fires
+once each time the Inbox screen enters the composition tree (forward navigation,
+back-navigation into it, and screen rotation each cause a new composition entry).
 
 
 ---
@@ -895,7 +950,7 @@ as the web UI. Rules are evaluated top-to-bottom; the first matching rule wins.
 | 1 min – < 1 hour   | Relative ("42 min ago")    | "42 min ago"      | ¹
 | Same day, ≥ 1 hour | Time only (HH:mm, 24-hour) | "14:32"           | ³
 | Yesterday          | "Yesterday HH:mm"          | "Yesterday 09:15" | ²
-| 2–6 days ago       | Weekday + time             | "Mon 14:32"       |
+| 2–6 days ago       | Weekday + time             | "Mon 14:32"       | ⁵
 | 7 days – same year | Short date + time          | "Apr 3, 14:32"    | ⁴
 | Previous years     | Short date with year only  | "Apr 3, 2023"     | ⁴
 
@@ -915,6 +970,10 @@ AND in the same calendar year as today. "Previous years" means a different calen
 from today (the two rules are mutually exclusive). The time component is shown for the
 same-year rule but intentionally omitted for previous years — older messages are
 displayed date-only for brevity.
+
+⁵ "2–6 days ago" covers calendar days 2 through 6 before today, where day boundaries
+are at midnight in the device's local timezone (consistent with the Yesterday and
+Same-day rules).
 
 Message detail always shows the full form with timezone abbreviation:
 `EEE, d MMM yyyy, HH:mm z` (e.g. "Mon, 3 Apr 2023, 14:32 CEST"). Use
@@ -963,7 +1022,9 @@ to version control.
   set-default is deferred to v1+
 - Filter editing — the Filters settings tab is read-only; add/edit/delete/reorder of
   filters is deferred to v1+
-- Scheduled send — no "Send later" in Compose; Scheduled folder is shown with Delete only
+- Scheduled send — no "Send later" in Compose; Scheduled folder is accessible for reading
+  and cancelling the scheduled send (which moves the message back to Drafts); direct
+  deletion via `DELETE /messages/{id}` is rejected by the API for Scheduled messages
 - Folder reordering (entirely out of scope for v1)
 - Drag-to-reorder for filters and identities (tap-to-reorder with up/down arrows as
   a simpler alternative is acceptable for v1)
