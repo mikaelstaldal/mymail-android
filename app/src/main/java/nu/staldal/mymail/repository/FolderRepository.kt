@@ -16,13 +16,14 @@ class FolderRepository @Inject constructor(
     private fun parseHttpError(e: HttpException): Throwable {
         return try {
             val body = e.response()?.errorBody()?.string()
-            if (body != null) {
+            val message = if (body != null) {
                 val match = Regex(""""error"\s*:\s*"([^"]+)"""").find(body)
-                if (match != null) {
-                    RuntimeException(match.groupValues[1])
-                } else {
-                    e
-                }
+                match?.groupValues?.get(1)
+            } else {
+                null
+            }
+            if (message != null) {
+                HttpStatusException(e.code(), message)
             } else {
                 e
             }

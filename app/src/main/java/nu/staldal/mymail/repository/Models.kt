@@ -2,6 +2,8 @@ package nu.staldal.mymail.repository
 
 import nu.staldal.mymail.model.MessageSummary
 
+class HttpStatusException(val statusCode: Int, message: String) : RuntimeException(message)
+
 data class ThreadResponse(
     val total: Int,
     val truncated: Boolean,
