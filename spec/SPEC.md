@@ -558,7 +558,8 @@ follows:
 
 "Excluding own identities" means: omit any address whose email address matches one of
 the user's identity addresses (comparison is case-insensitive on both local part and
-domain, per RFC 5321 convention). This applies even if the only candidate for the `To`
+domain, per RFC 5321 convention). Plus-addressed variants of an identity address are also treated as own — i.e. an address `local+tag@domain` matches identity `local@domain`.
+This applies even if the only candidate for the `To`
 field is a Reply-To address that matches an own identity — in that case `To` is left
 empty and the user must fill it in manually.
 
