@@ -74,6 +74,8 @@ afterEvaluate {
     tasks.named("compileDebugKotlin") { dependsOn("openApiGenerate") }
     tasks.named("compileReleaseKotlin") { dependsOn("openApiGenerate") }
     tasks.named("compileDebugUnitTestKotlin") { dependsOn("openApiGenerate") }
+    tasks.named("kspDebugKotlin") { dependsOn("openApiGenerate") }
+    tasks.named("kspReleaseKotlin") { dependsOn("openApiGenerate") }
 }
 
 dependencies {
