@@ -28,12 +28,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import nu.staldal.mymail.MainActivity
+import nu.staldal.mymail.worker.MailPollingWorker
 
 @Composable
 fun SetupScreen(
@@ -42,10 +45,13 @@ fun SetupScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var passwordVisible by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     LaunchedEffect(uiState.navigateToFolders) {
         if (uiState.navigateToFolders) {
             viewModel.onNavigatedToFolders()
+            MailPollingWorker.enqueuePolling(context)
+            (context as? MainActivity)?.startForegroundPollingIfNeeded()
             navController.navigate("folders") {
                 popUpTo("setup") { inclusive = true }
             }

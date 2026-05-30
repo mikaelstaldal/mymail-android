@@ -103,7 +103,7 @@ fun MessageListScreen(
         viewModel.loadFolders()
     }
 
-    // Clear notifications and persisted baseline when entering Inbox
+    // Clear notifications, reset persisted baseline, and reset in-memory poller baseline when entering Inbox
     LaunchedEffect(Unit) {
         if (folderId == INBOX_ID) {
             val notificationManager =
@@ -111,8 +111,9 @@ fun MessageListScreen(
             notificationManager.cancelAll()
             context.getSharedPreferences("mymail_prefs", Context.MODE_PRIVATE)
                 .edit()
-                .putInt("inbox_unread_count", 0)
+                .remove("inbox_unread_count")
                 .apply()
+            (context as? nu.staldal.mymail.MainActivity)?.resetForegroundPollerBaseline()
         }
     }
 
