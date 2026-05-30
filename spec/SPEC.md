@@ -530,7 +530,9 @@ show a Snackbar with the server error message.
 success, call `navController.popBackStack()` to return to the Message List and trigger a
 full list refresh so the discarded draft no longer appears. On 404 (draft was already
 discarded from another client — race condition), show a Snackbar ("Draft already
-discarded") and call `navController.popBackStack()`.
+discarded") and call `navController.popBackStack()`. In both cases (204 and 404), set the
+navigation result keys (`needsRefresh = true`) on the previous back-stack entry before
+calling `popBackStack()` — the draft is gone in either case and the Message List must refresh.
 
 The **Delete** action for Inbox, user folders, and Sent calls `DELETE /api/v1/messages/{id}`,
 which moves the message to Trash (non-permanent). No confirmation dialog is required — the
@@ -579,7 +581,7 @@ Supports new mail, reply, reply-all, forward, and draft editing.
 
 | Field      | Notes                                                                          |
 |------------|--------------------------------------------------------------------------------|
-| From       | `DropdownMenu` populated from `GET /api/v1/identities`. For new compose, pre-select the identity with `is_default: true`. For Reply/Reply-All, pre-select the identity whose address matches a To or Cc address of the source message; fall back to the default identity if no match is found. |
+| From       | `DropdownMenu` populated from `GET /api/v1/identities`. For new compose, pre-select the identity with `is_default: true`. For Reply/Reply-All, pre-select the identity whose address matches a To or Cc address of the source message; fall back to the default identity if no match is found. If the identities fetch returns an empty list, show a centred error: "No sending identities configured — go to Settings → Identities to add one." Disable all form fields and the Send button; the user can navigate back. The auto-save loop must not start in this state. |
 | To         | Chip text field with autocomplete from `GET /api/v1/contacts?q=…&limit=10`. Autocomplete fires after the user types at least 1 character, debounced at 300 ms. When the text input is cleared, close the dropdown and show no suggestions. When the query returns no contacts, close the dropdown (no "no results" item). When the response `total` exceeds 10, show a non-selectable hint item "Type more to narrow…" at the bottom of the dropdown instead of paginating. Tapping a suggestion adds a chip; the chip displays the contact's `name` if non-empty, otherwise the bare `address`; the chip encodes the address in RFC 5322 format (`"Name" <address>` when name is non-empty, bare `address` otherwise) for use in the `to_addr` / `cc_addr` / `bcc_addr` save fields. The user may also type an address manually and commit it as a chip by pressing Enter, comma, or Tab; no client-side RFC 5322 validation is performed — invalid addresses are accepted and reported by the server as a 400 on Send. Maximum 8192 characters (RFC 5322 comma-separated addresses) — enforce as a hard cap (stop accepting input at the limit). |
 | Cc         | Same as To (collapsed by default, expand via button)                           |
 | Bcc        | Same as To (collapsed by default)                                              |
@@ -604,12 +606,14 @@ or partially filled fields as the first draft version. Pre-fill fields as follow
 | Subject | `Re: ` + source subject (suppress duplicate `Re:` prefixes — strip all leading `Re:` prefixes case-insensitively using `^(?i)(re:\s*)+` before prepending `Re: `) | Same as Reply | `Fwd: ` + source subject (suppress duplicate `Fwd:` prefixes — strip all leading `Fwd:` prefixes case-insensitively using `^(?i)(fwd:\s*)+` before prepending `Fwd: `) |
 | Body    | Attribution line + quoted source body (see below)  | Same as Reply                                                              | Original headers + quoted source body (see below) |
 
+`reply_to_addr` is treated as a full RFC 5322 comma-separated address list; all addresses
+it contains (after excluding own identities) become `To` chips, not just the first one.
+
 "Excluding own identities" means: omit any address whose email address matches one of
 the user's identity addresses (comparison is case-insensitive on both local part and
 domain, per RFC 5321 convention). Plus-addressed variants of an identity address are also treated as own — i.e. an address `local+tag@domain` matches identity `local@domain`.
-This applies even if the only candidate for the `To`
-field is a Reply-To address that matches an own identity — in that case `To` is left
-empty and the user must fill it in manually.
+This applies even if every candidate in the `reply_to_addr` list matches an own identity —
+in that case `To` is left empty and the user must fill it in manually.
 
 **Quoted body format — Reply / Reply All:**
 ```
@@ -683,9 +687,10 @@ from the navigation argument, then fetch the existing draft via `GET /api/v1/mes
 to pre-populate all form fields (From, To, Cc, Bcc, Reply-To, Subject, Body, and any
 existing server-side attachments shown as removable chips). There is no dedicated
 `GET /api/v1/drafts/{id}` endpoint — drafts are regular messages accessible via the
-messages endpoint. To pre-populate the From dropdown, match the draft's `from_addr`
-against the fetched identities list (case-insensitive address comparison); if no identity
-matches, pre-select the default identity. To pre-populate the address chip fields (To,
+messages endpoint. To pre-populate the From dropdown, parse the draft's `from_addr` as an RFC 5322
+address string to extract the bare addr-spec (e.g. `"Alice Smith" <alice@example.com>`
+→ `alice@example.com`), then match that addr-spec against each identity's `address` field
+using case-insensitive comparison; if no identity matches, pre-select the default identity. To pre-populate the address chip fields (To,
 Cc, Bcc), parse the `to_addr`, `cc_addr`, and `bcc_addr` strings from the `MessageDetail`
 response as RFC 5322 comma-separated address lists into individual chips; each chip
 displays the display name if present, or the bare email address otherwise. A correct
@@ -700,13 +705,19 @@ subsequent user edits mark the draft dirty. The auto-save loop then uses
 Start an auto-save coroutine on a 30-second `delay` loop. On first save (new compose),
 call `POST /api/v1/drafts` and store the returned `id` from the 201 response. On subsequent saves call
 `PUT /api/v1/drafts/{id}`. Track a dirty flag; mark dirty on any field edit, clear it
-after each successful save. If the first `POST /api/v1/drafts` fails, show a non-blocking informational Snackbar
-("Draft could not be saved — will retry") with no Retry action button — the auto-save loop
-retries automatically at the next tick. Keep the dirty flag set and let the next loop tick
-retry the POST. For Forward mode, `source_message_id` must be included in every retry
-attempt of the initial `POST` — it is only omitted from subsequent `PUT` calls once the
-`POST` has succeeded. The draft is lost only if the user navigates away before any POST
-succeeds.
+after each successful save. If the first `POST /api/v1/drafts` fails with a network or server error (non-400), show a
+non-blocking informational Snackbar ("Draft could not be saved — will retry") with no Retry
+action button — the auto-save loop retries automatically at the next tick. Keep the dirty
+flag set and let the next loop tick retry the POST. For Forward mode, `source_message_id`
+must be included in every retry attempt of the initial `POST` — it is only omitted from
+subsequent `PUT` calls once the `POST` has succeeded.
+If the first `POST /api/v1/drafts` fails with a **400** response (e.g. the forwarded
+source message no longer exists), stop the auto-save loop permanently and show a persistent
+non-dismissible inline error above the compose fields with the server error message. The
+user should navigate back; the draft cannot be saved in this state. The `onCleared()`
+final-save path is also skipped if a permanent 400 failure has occurred.
+The draft is lost only if the user navigates away before any POST succeeds (in the
+non-400-failure case).
 
 Use a `Mutex` (`saveMutex`) to serialise save operations. Both the auto-save loop body
 and the `onCleared()` final-save coroutine must acquire `saveMutex` before checking the
@@ -874,7 +885,9 @@ endpoints:
 | Delete    | `DELETE /api/v1/folders/{id}`     |
 
 For Create, on 201 success, dismiss the dialog and reload the folder list. For Create and Rename, on 409 Conflict (duplicate folder name), show the server error
-message inline in the dialog. For Rename, on 404 (folder was deleted between list load
+message inline in the dialog. For Rename, on 400 (e.g. attempting to rename a built-in
+folder, which the UI should prevent but handle defensively), show the server error message
+inline in the dialog. For Rename, on 404 (folder was deleted between list load
 and the rename attempt), close the dialog and show a Snackbar with the error message.
 
 **Filters tab:** Fetches `GET /api/v1/filters` on enter. Show an inline error with a
@@ -939,6 +952,11 @@ dialog. Deleting a contact shows a confirmation dialog before calling
 | Delete    | `DELETE /api/v1/contacts/{id}`    |
 
 For Create, on 201 success dismiss the dialog and reload the list.
+For Update (`PUT /api/v1/contacts/{id}`), on 200 success dismiss the dialog and reload the
+list. On 404 (contact deleted from another client between list load and the edit submit),
+close the dialog and show a Snackbar with the server error message; reload the list so the
+deleted contact disappears. On 409 Conflict (duplicate address), show the server error
+message inline in the dialog. On 400, show the server error message inline in the dialog.
 `PUT /api/v1/contacts/{id}` uses **full-replacement semantics**: any field omitted from the
 request body is cleared (omitting `name` sets it to empty string). The dialog must always
 send both `address` and `name` fields, even when `name` is an empty string.
