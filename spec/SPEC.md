@@ -510,8 +510,9 @@ Back behaviour on Android).
   `application/vnd.android.package-archive`.
   For permitted types, the `ACTION_VIEW` `Intent` must include
   `FLAG_GRANT_READ_URI_PERMISSION` (not write) and no additional URI permission flags.
-  Reject downloads whose `Content-Length` exceeds 100 MB; show an inline error message
-  ("Attachment too large to download") and do not write any bytes to disk. Cached
+  Reject downloads whose `Content-Length` exceeds 100 MB, or where the `Content-Length`
+  header is absent or cannot be parsed as a non-negative integer; show an inline error
+  message ("Attachment too large to download") and do not write any bytes to disk. Cached
   attachment files are deleted when the `MessageDetailScreen` leaves the composition
   (via `DisposableEffect`). No `WRITE_EXTERNAL_STORAGE` permission is needed on
   API 29+.
@@ -565,8 +566,8 @@ show a Snackbar with the server error message.
 
 **Not junk** calls `POST /api/v1/messages/{id}/mark-not-junk`. On success call
 `navController.popBackStack()` to return to the previous screen and trigger a full list
-refresh. The message is moved to Inbox server-side; the refresh removes it from the
-Junk message list. On 400 (message is no longer in Junk — race condition),
+refresh. The message is moved to Inbox server-side and marked as unread; the refresh
+removes it from the Junk message list. On 400 (message is no longer in Junk — race condition),
 show a Snackbar with the server error message.
 
 **Discard** calls `DELETE /api/v1/drafts/{id}` after a confirmation dialog. On 204
@@ -594,7 +595,10 @@ confirmed — race condition), show a Snackbar ("Message was already processed")
 `navController.popBackStack()`.
 
 **Cancel snooze** calls `DELETE /api/v1/messages/{id}/snooze`, which returns the message
-to the folder it was in before snoozed (or Inbox if that folder was deleted). No
+to the folder it was in before snoozed (or Inbox if that folder was deleted) and marks it
+as unread — matching the behaviour of natural snooze expiry. The response body contains
+`{"id": …, "folder_id": …}` where `folder_id` reflects the actual folder the message was
+moved to; the client does not need to act on this value beyond what is specified here. No
 confirmation dialog. On success, call `navController.popBackStack()` to return to the
 Snoozed Message List and trigger a full list refresh so the message no longer appears.
 On 400 (message is no longer in the Snoozed folder — race condition), show a Snackbar
@@ -807,8 +811,10 @@ concurrently with an attachment upload will not overwrite any uploaded attachmen
 The Send button is disabled when all three recipient fields (To, Cc, Bcc) are empty;
 it becomes enabled as soon as any one of them is non-empty. Before initiating Send,
 cancel the running auto-save job. Disable the Send button while in flight. If no `draftId` exists yet (the user tapped Send before the first 30-second
-auto-save fired), perform a synchronous `POST /api/v1/drafts` first to obtain one, then
-proceed. Because newly added files are uploaded immediately on selection (not deferred to
+auto-save fired), acquire `saveMutex` and, if `draftId` is still null inside the lock,
+perform a synchronous `POST /api/v1/drafts` to obtain one; release the lock before
+proceeding. Acquiring `saveMutex` here is consistent with the attachment upload path
+and prevents the auto-save loop from creating a duplicate draft if it races with Send. Because newly added files are uploaded immediately on selection (not deferred to
 send time), no attachment upload step is needed here. Always send via
 `POST /api/v1/drafts/{id}/send`.
 On 201 or 202, navigate back (the draft is consumed by the send operation; the auto-save
