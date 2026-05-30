@@ -70,9 +70,11 @@ kotlin.sourceSets["main"].kotlin.srcDir(
     layout.buildDirectory.dir("generated/openapi/src/main/kotlin")
 )
 
-tasks.named("compileDebugKotlin") { dependsOn("openApiGenerate") }
-tasks.named("compileReleaseKotlin") { dependsOn("openApiGenerate") }
-tasks.named("compileDebugUnitTestKotlin") { dependsOn("openApiGenerate") }
+afterEvaluate {
+    tasks.named("compileDebugKotlin") { dependsOn("openApiGenerate") }
+    tasks.named("compileReleaseKotlin") { dependsOn("openApiGenerate") }
+    tasks.named("compileDebugUnitTestKotlin") { dependsOn("openApiGenerate") }
+}
 
 dependencies {
     implementation(libs.core.ktx)
