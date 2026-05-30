@@ -5,6 +5,7 @@ import nu.staldal.mymail.api.DraftsApi
 import nu.staldal.mymail.api.DraftsWithAttachmentsApi
 import nu.staldal.mymail.di.RetrofitHolder
 import nu.staldal.mymail.model.DraftRequest
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.ResponseBody
 import retrofit2.HttpException
@@ -106,7 +107,7 @@ class DraftRepository @Inject constructor(
                 "message",
                 null,
                 okhttp3.RequestBody.create(
-                    okhttp3.MediaType.parse("application/json"),
+                    "application/json".toMediaType(),
                     kotlinx.serialization.json.Json.encodeToString(DraftRequest.serializer(), request),
                 ),
             )
@@ -130,7 +131,7 @@ class DraftRepository @Inject constructor(
                 "message",
                 null,
                 okhttp3.RequestBody.create(
-                    okhttp3.MediaType.parse("application/json"),
+                    "application/json".toMediaType(),
                     kotlinx.serialization.json.Json.encodeToString(DraftRequest.serializer(), request),
                 ),
             )

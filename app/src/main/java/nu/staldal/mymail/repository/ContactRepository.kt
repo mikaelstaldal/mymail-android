@@ -3,6 +3,7 @@ package nu.staldal.mymail.repository
 import nu.staldal.mymail.api.ContactsApi
 import nu.staldal.mymail.di.RetrofitHolder
 import nu.staldal.mymail.model.Contact
+import nu.staldal.mymail.model.ContactsPostRequest
 import retrofit2.HttpException
 import java.io.IOException
 import javax.inject.Inject
@@ -50,11 +51,7 @@ class ContactRepository @Inject constructor(
     suspend fun createContact(address: String, name: String?): Result<Contact> {
         val api = retrofitHolder.get().create(ContactsApi::class.java)
         return try {
-            val body = buildMap<String, Any?> {
-                put("address", address)
-                if (name != null) put("name", name)
-            }
-            Result.success(api.createContact(body))
+            Result.success(api.createContact(ContactsPostRequest(address = address, name = name)))
         } catch (e: HttpException) {
             Result.failure(parseHttpError(e))
         } catch (e: IOException) {
@@ -65,8 +62,7 @@ class ContactRepository @Inject constructor(
     suspend fun updateContact(id: Long, address: String, name: String): Result<Contact> {
         val api = retrofitHolder.get().create(ContactsApi::class.java)
         return try {
-            val body = mapOf("address" to address, "name" to name)
-            Result.success(api.replaceContact(id, body))
+            Result.success(api.replaceContact(id, ContactsPostRequest(address = address, name = name)))
         } catch (e: HttpException) {
             Result.failure(parseHttpError(e))
         } catch (e: IOException) {

@@ -117,7 +117,7 @@ private fun buildFilterSummary(filter: Filter, folders: List<Folder>): String {
             if (folderName != null) "Move to $folderName" else "Move to folder #$folderId"
         }
         Filter.Action.trash -> "Move to Trash"
-        Filter.Action.markRead -> "Mark as read"
+        Filter.Action.mark_read -> "Mark as read"
         Filter.Action.drop -> "Drop"
     }
 

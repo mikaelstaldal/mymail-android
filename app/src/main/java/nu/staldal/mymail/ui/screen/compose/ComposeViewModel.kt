@@ -29,11 +29,12 @@ import nu.staldal.mymail.repository.DraftRepository
 import nu.staldal.mymail.repository.HttpStatusException
 import nu.staldal.mymail.repository.IdentityRepository
 import nu.staldal.mymail.repository.MessageRepository
-import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.RequestBody
+import org.apache.james.mime4j.dom.address.Group
 import org.apache.james.mime4j.dom.address.Mailbox
-import org.apache.james.mime4j.field.address.AddressBuilder
+import org.apache.james.mime4j.field.address.DefaultAddressParser
 import java.io.File
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -252,11 +253,7 @@ class ComposeViewModel @Inject constructor(
                 val reSubject = "Re: " + source.subject.replace(Regex("^(?i)(re:\\s*)+"), "")
                 _subject.value = reSubject
 
-                val dateStr = try {
-                    OffsetDateTime.parse(source.date).format(DateTimeFormatter.RFC_1123_DATE_TIME)
-                } catch (_: Exception) {
-                    source.date
-                }
+                val dateStr = source.date.format(DateTimeFormatter.RFC_1123_DATE_TIME)
                 val attribution = "On $dateStr, ${source.fromAddr} wrote:\n"
                 val quotedBody = source.bodyText.lines().joinToString("\n") { "> $it" }
                 val baseBody = "\n\n$attribution$quotedBody"
@@ -315,11 +312,7 @@ class ComposeViewModel @Inject constructor(
                 val fwdSubject = "Fwd: " + source.subject.replace(Regex("^(?i)(fwd:\\s*)+"), "")
                 _subject.value = fwdSubject
 
-                val dateStr = try {
-                    OffsetDateTime.parse(source.date).format(DateTimeFormatter.RFC_1123_DATE_TIME)
-                } catch (_: Exception) {
-                    source.date
-                }
+                val dateStr = source.date.format(DateTimeFormatter.RFC_1123_DATE_TIME)
                 val forwardedBlock = buildString {
                     appendLine("---------- Forwarded message ----------")
                     appendLine("From: ${source.fromAddr}")
@@ -725,7 +718,7 @@ class ComposeViewModel @Inject constructor(
                         redownloadedFiles.add(cachedFile)
 
                         val requestBody = RequestBody.create(
-                            MediaType.parse(meta.contentType),
+                            meta.contentType.toMediaType(),
                             cachedFile,
                         )
                         val part = MultipartBody.Part.createFormData(
@@ -751,7 +744,7 @@ class ComposeViewModel @Inject constructor(
                 val filename = resolveFilename(context, uri)
                 val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
                 val bytes = context.contentResolver.openInputStream(uri)?.readBytes() ?: continue
-                val requestBody = RequestBody.create(MediaType.parse(mimeType), bytes)
+                val requestBody = RequestBody.create(mimeType.toMediaType(), bytes)
                 val part = MultipartBody.Part.createFormData("attachments", filename, requestBody)
                 newParts.add(part)
                 newAttachmentInfos.add(
@@ -866,8 +859,14 @@ class ComposeViewModel @Inject constructor(
     private fun parseAddressChips(addrString: String): List<AddressChip> {
         if (addrString.isBlank()) return emptyList()
         return try {
-            val addressList = AddressBuilder.DEFAULT.parseAddressList(addrString)
-            addressList.flatten().filterIsInstance<Mailbox>().map { mailbox ->
+            val addressList = DefaultAddressParser.DEFAULT.parseAddressList(addrString)
+            addressList.flatMap { address ->
+                when (address) {
+                    is Mailbox -> listOf(address)
+                    is Group -> address.mailboxes.toList()
+                    else -> emptyList()
+                }
+            }.map { mailbox ->
                 val name = mailbox.name
                 val addr = buildString {
                     if (mailbox.localPart != null) append(mailbox.localPart)
@@ -888,8 +887,14 @@ class ComposeViewModel @Inject constructor(
     private fun extractAddrSpec(fromAddr: String): String {
         if (fromAddr.isBlank()) return ""
         return try {
-            val addressList = AddressBuilder.DEFAULT.parseAddressList(fromAddr)
-            val mailbox = addressList.flatten().filterIsInstance<Mailbox>().firstOrNull()
+            val addressList = DefaultAddressParser.DEFAULT.parseAddressList(fromAddr)
+            val mailbox = addressList.flatMap { address ->
+                when (address) {
+                    is Mailbox -> listOf(address)
+                    is Group -> address.mailboxes.toList()
+                    else -> emptyList()
+                }
+            }.firstOrNull()
             if (mailbox != null) {
                 buildString {
                     if (mailbox.localPart != null) append(mailbox.localPart)

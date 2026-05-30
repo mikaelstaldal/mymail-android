@@ -494,11 +494,7 @@ private fun MessageRow(
                     maxLines = 1,
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                val dateText = try {
-                    formatMessageListDate(OffsetDateTime.parse(message.date))
-                } catch (_: Exception) {
-                    message.date
-                }
+                val dateText = formatMessageListDate(message.date)
                 Text(
                     text = dateText,
                     style = MaterialTheme.typography.bodySmall,

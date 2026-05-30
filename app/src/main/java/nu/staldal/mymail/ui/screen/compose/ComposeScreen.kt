@@ -356,9 +356,9 @@ fun ComposeScreen(
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodyMedium,
                             )
-                            if (att.meta?.size != null) {
+                            if (att.meta?.propertySize != null) {
                                 Text(
-                                    text = formatFileSize(att.meta.size.toLong()),
+                                    text = formatFileSize(att.meta.propertySize.toLong()),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

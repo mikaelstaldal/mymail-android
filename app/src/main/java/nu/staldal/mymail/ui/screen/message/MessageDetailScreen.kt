@@ -431,11 +431,7 @@ private fun HeaderSection(
     var expanded by remember { mutableStateOf(false) }
 
     val folderId = message.folderId.toLong()
-    val dateFormatted = try {
-        formatMessageDetailDate(OffsetDateTime.parse(message.date))
-    } catch (_: Exception) {
-        message.date
-    }
+    val dateFormatted = formatMessageDetailDate(message.date)
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -496,7 +492,7 @@ private fun HeaderSection(
                             .weight(0.75f)
                             .combinedClickable(
                                 onClick = {},
-                                onLongClick = { onCopyDate(message.date) },
+                                onLongClick = { onCopyDate(message.date.toString()) },
                             ),
                     )
                 }
@@ -504,21 +500,11 @@ private fun HeaderSection(
                 HeaderRow("Subject", message.subject.ifBlank { "(no subject)" })
 
                 if (folderId == SNOOZED_ID && message.snoozedUntil != null) {
-                    val snoozedFormatted = try {
-                        formatMessageDetailDate(OffsetDateTime.parse(message.snoozedUntil))
-                    } catch (_: Exception) {
-                        message.snoozedUntil
-                    }
-                    HeaderRow("Snoozed until", snoozedFormatted)
+                    HeaderRow("Snoozed until", formatMessageDetailDate(message.snoozedUntil!!))
                 }
 
                 if (folderId == SCHEDULED_ID && message.sendAt != null) {
-                    val scheduledFormatted = try {
-                        formatMessageDetailDate(OffsetDateTime.parse(message.sendAt))
-                    } catch (_: Exception) {
-                        message.sendAt
-                    }
-                    HeaderRow("Scheduled for", scheduledFormatted)
+                    HeaderRow("Scheduled for", formatMessageDetailDate(message.sendAt!!))
                 }
             }
         }
@@ -573,7 +559,7 @@ private fun AttachmentRow(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    text = formatFileSize(attachment.size.toLong()),
+                    text = formatFileSize(attachment.propertySize.toLong()),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -715,11 +701,7 @@ private fun ThreadMessageRow(
                 maxLines = 1,
             )
         }
-        val dateText = try {
-            formatMessageListDate(OffsetDateTime.parse(summary.date))
-        } catch (_: Exception) {
-            summary.date
-        }
+        val dateText = formatMessageListDate(summary.date)
         Text(
             text = dateText,
             style = MaterialTheme.typography.bodySmall,

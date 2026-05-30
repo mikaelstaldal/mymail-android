@@ -459,11 +459,7 @@ private fun SearchResultRow(
                 maxLines = 1,
             )
             Spacer(modifier = Modifier.width(8.dp))
-            val dateText = try {
-                formatMessageListDate(OffsetDateTime.parse(item.summary.date))
-            } catch (_: Exception) {
-                item.summary.date
-            }
+            val dateText = formatMessageListDate(item.summary.date)
             Text(
                 text = dateText,
                 style = MaterialTheme.typography.bodySmall,

@@ -4,6 +4,10 @@ import nu.staldal.mymail.api.MessagesApi
 import nu.staldal.mymail.di.RetrofitHolder
 import nu.staldal.mymail.model.MessageDetail
 import nu.staldal.mymail.model.MessageSummary
+import nu.staldal.mymail.model.MessagesDeleteRequest
+import nu.staldal.mymail.model.MessagesIdPatchRequest
+import nu.staldal.mymail.model.MessagesMovePostRequest
+import nu.staldal.mymail.model.MessagesPatchRequest
 import retrofit2.HttpException
 import java.io.IOException
 import javax.inject.Inject
@@ -68,12 +72,16 @@ class MessageRepository @Inject constructor(
     ): Result<MessageSummary> {
         val api = retrofitHolder.get().create(MessagesApi::class.java)
         return try {
-            val body = buildMap<String, Any> {
-                if (read != null) put("read", read)
-                if (folderId != null) put("folder_id", folderId)
-                if (flagged != null) put("flagged", flagged)
-            }
-            Result.success(api.updateMessageMetadata(id, body))
+            Result.success(
+                api.updateMessageMetadata(
+                    id,
+                    MessagesIdPatchRequest(
+                        folderId = folderId?.toInt(),
+                        read = read,
+                        flagged = flagged,
+                    ),
+                )
+            )
         } catch (e: HttpException) {
             Result.failure(parseHttpError(e))
         } catch (e: IOException) {
@@ -96,11 +104,7 @@ class MessageRepository @Inject constructor(
     suspend fun bulkUpdateMessages(ids: List<Long>, read: Boolean? = null): Result<Unit> {
         val api = retrofitHolder.get().create(MessagesApi::class.java)
         return try {
-            val body = buildMap<String, Any> {
-                put("ids", ids)
-                if (read != null) put("read", read)
-            }
-            api.bulkUpdateMessages(body)
+            api.bulkUpdateMessages(MessagesPatchRequest(ids = ids.map { it.toInt() }, read = read))
             Result.success(Unit)
         } catch (e: HttpException) {
             Result.failure(parseHttpError(e))
@@ -112,8 +116,7 @@ class MessageRepository @Inject constructor(
     suspend fun bulkDeleteMessages(ids: List<Long>): Result<Unit> {
         val api = retrofitHolder.get().create(MessagesApi::class.java)
         return try {
-            val body = mapOf("ids" to ids)
-            api.bulkDeleteMessages(body)
+            api.bulkDeleteMessages(MessagesDeleteRequest(ids = ids.map { it.toInt() }))
             Result.success(Unit)
         } catch (e: HttpException) {
             Result.failure(parseHttpError(e))
@@ -125,8 +128,9 @@ class MessageRepository @Inject constructor(
     suspend fun moveMessages(ids: List<Long>, folderId: Long): Result<Unit> {
         val api = retrofitHolder.get().create(MessagesApi::class.java)
         return try {
-            val body = mapOf("ids" to ids, "folder_id" to folderId)
-            api.bulkMoveMessagesToAFolder(body)
+            api.bulkMoveMessagesToAFolder(
+                MessagesMovePostRequest(ids = ids.map { it.toInt() }, folderId = folderId.toInt())
+            )
             Result.success(Unit)
         } catch (e: HttpException) {
             Result.failure(parseHttpError(e))
@@ -208,7 +212,20 @@ class MessageRepository @Inject constructor(
             val response = api.searchMessages(q, folderId, dateFrom, dateTo, limit, offset)
             val items = response.items.map { item ->
                 MessageSummaryWithSnippet(
-                    summary = item,
+                    summary = MessageSummary(
+                        id = item.id,
+                        folderId = item.folderId,
+                        messageId = item.messageId,
+                        fromAddr = item.fromAddr,
+                        toAddr = item.toAddr,
+                        subject = item.subject,
+                        date = item.date,
+                        read = item.read,
+                        flagged = item.flagged,
+                        hasAttachments = item.hasAttachments,
+                        sendFailed = item.sendFailed,
+                        createdAt = item.createdAt,
+                    ),
                     snippet = item.snippet,
                 )
             }

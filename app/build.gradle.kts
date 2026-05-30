@@ -45,6 +45,12 @@ android {
         compose = true
         buildConfig = true
     }
+
+    packaging {
+        resources {
+            excludes += "META-INF/DEPENDENCIES"
+        }
+    }
 }
 
 openApiGenerate {
@@ -103,6 +109,7 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.lifecycle.runtime.ktx)
     implementation(libs.lifecycle.runtime.compose)
+    implementation(libs.lifecycle.process)
 
     // Hilt
     implementation(libs.hilt.android)
@@ -114,6 +121,7 @@ dependencies {
     // Retrofit + OkHttp
     implementation(libs.retrofit)
     implementation(libs.retrofit.converter.kotlinx.serialization)
+    implementation(libs.retrofit.converter.scalars)
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging.interceptor)
 
@@ -129,6 +137,7 @@ dependencies {
 
     // MIME4J
     implementation(libs.apache.mime4j.core)
+    implementation(libs.apache.mime4j.dom)
 
     // Testing
     testImplementation(libs.junit)

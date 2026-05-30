@@ -3,6 +3,8 @@ package nu.staldal.mymail.repository
 import nu.staldal.mymail.api.FoldersApi
 import nu.staldal.mymail.di.RetrofitHolder
 import nu.staldal.mymail.model.Folder
+import nu.staldal.mymail.model.FoldersIdPatchRequest
+import nu.staldal.mymail.model.FoldersPostRequest
 import retrofit2.HttpException
 import java.io.IOException
 import javax.inject.Inject
@@ -47,9 +49,7 @@ class FolderRepository @Inject constructor(
     suspend fun createFolder(name: String): Result<Folder> {
         val api = retrofitHolder.get().create(FoldersApi::class.java)
         return try {
-            val body = mapOf("name" to name)
-            val response = api.createFolder(body)
-            Result.success(response)
+            Result.success(api.createFolder(FoldersPostRequest(name = name)))
         } catch (e: HttpException) {
             Result.failure(parseHttpError(e))
         } catch (e: IOException) {
@@ -60,9 +60,7 @@ class FolderRepository @Inject constructor(
     suspend fun renameFolder(id: Long, name: String): Result<Folder> {
         val api = retrofitHolder.get().create(FoldersApi::class.java)
         return try {
-            val body = mapOf("name" to name)
-            val response = api.updateFolder(id, body)
-            Result.success(response)
+            Result.success(api.updateFolder(id, FoldersIdPatchRequest(name = name)))
         } catch (e: HttpException) {
             Result.failure(parseHttpError(e))
         } catch (e: IOException) {

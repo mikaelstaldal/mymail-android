@@ -111,7 +111,7 @@ fun ContactsTab(
                         verticalArrangement = Arrangement.Center,
                     ) {
                         Text(
-                            text = listState.initialError,
+                            text = listState.initialError!!,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.padding(bottom = 16.dp),
@@ -159,7 +159,7 @@ fun ContactsTab(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                 ) {
                                     Text(
-                                        text = listState.pageError,
+                                        text = listState.pageError!!,
                                         color = MaterialTheme.colorScheme.error,
                                         style = MaterialTheme.typography.bodySmall,
                                     )

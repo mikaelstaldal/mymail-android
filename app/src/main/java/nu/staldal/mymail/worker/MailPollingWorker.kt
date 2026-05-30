@@ -1,6 +1,7 @@
 package nu.staldal.mymail.worker
 
 import android.Manifest
+import android.app.Application
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -18,7 +19,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.Result
+import androidx.work.ListenableWorker
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
@@ -38,12 +39,14 @@ class MailPollingWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val folderRepository: FolderRepository,
     @Named("plain") private val prefs: SharedPreferences,
-    private val application: MyMailApplication,
+    private val app: Application,
 ) : CoroutineWorker(context, workerParams) {
 
-    override suspend fun doWork(): Result {
+    private val application get() = app as MyMailApplication
+
+    override suspend fun doWork(): ListenableWorker.Result {
         if (application.isAppInForeground.get()) {
-            return Result.success()
+            return ListenableWorker.Result.success()
         }
 
         val result = folderRepository.listFolders()
@@ -55,14 +58,14 @@ class MailPollingWorker @AssistedInject constructor(
                 if (!application.isAppInForeground.get()) {
                     postSessionExpiredNotification()
                 }
-                return Result.success()
+                return ListenableWorker.Result.success()
             }
             Log.w(TAG, "Failed to fetch folders for polling", error)
-            return Result.retry()
+            return ListenableWorker.Result.retry()
         }
 
-        val folders = result.getOrNull() ?: return Result.success()
-        val inbox = folders.find { it.id.toLong() == INBOX_ID } ?: return Result.success()
+        val folders = result.getOrNull() ?: return ListenableWorker.Result.success()
+        val inbox = folders.find { it.id.toLong() == INBOX_ID } ?: return ListenableWorker.Result.success()
         val currentCount = inbox.unreadCount
 
         val storedCount = if (prefs.contains(KEY_INBOX_UNREAD_COUNT)) {
@@ -73,7 +76,7 @@ class MailPollingWorker @AssistedInject constructor(
 
         if (storedCount == null) {
             prefs.edit().putInt(KEY_INBOX_UNREAD_COUNT, currentCount).apply()
-            return Result.success()
+            return ListenableWorker.Result.success()
         }
 
         if (currentCount > storedCount) {
@@ -81,7 +84,7 @@ class MailPollingWorker @AssistedInject constructor(
         }
 
         prefs.edit().putInt(KEY_INBOX_UNREAD_COUNT, currentCount).apply()
-        return Result.success()
+        return ListenableWorker.Result.success()
     }
 
     private fun buildDeepLinkPendingIntent(deepLinkUri: String): PendingIntent {
