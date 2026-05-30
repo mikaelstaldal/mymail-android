@@ -163,10 +163,27 @@ generated files; they are regenerated on every clean build.
 - A single `OkHttpClient` is shared. It has:
   - `BasicAuthInterceptor` — adds `Authorization: Basic …` from `CredentialStore`.
   - `ConnectTimeout` / `ReadTimeout` / `WriteTimeout`: 30 seconds each.
-  - Logging interceptor (debug builds only).
+  - Logging interceptor (debug builds only). The logging interceptor must **never** log
+    request headers (which contain the `Authorization` header with base64-encoded
+    credentials). Only URL, method, response code, and response time may be logged.
+    Credentials from `CredentialStore` must never appear in any `Log.*` call, crash
+    report, or analytics anywhere in the app.
+- The TLS configuration must never disable hostname verification or use a trust-all
+  `TrustManager` / custom `SSLSocketFactory`. The default OkHttp TLS settings must be
+  preserved; adding code that bypasses certificate validation (e.g., for "testing") is
+  prohibited in any build variant.
+- Declare a `res/xml/network_security_config.xml` and reference it in `AndroidManifest.xml`
+  via `android:networkSecurityConfig`. In the release configuration,
+  `cleartextTrafficPermitted` must be `false`. The debug override may permit cleartext to
+  allow plain HTTP in debug builds — this complements the UI-level URL validation and
+  enforces the restriction at the OS level so it cannot be bypassed by code paths that
+  bypass the Setup screen.
 - The `Authorization` header is added on every request. The server bypasses CSRF checks
   for requests without an `Origin` header, which is the standard native-client behaviour
-  (see REQUIREMENTS.md → CSRF Protection).
+  (see REQUIREMENTS.md → CSRF Protection). The server must only allow this bypass for
+  requests authenticated via the `Authorization` header (not for unauthenticated requests
+  or cookie-based sessions), so that the absence of an `Origin` header alone is not
+  sufficient to bypass CSRF.
 
 ### Error handling
 
@@ -202,7 +219,7 @@ Shown on first launch (no credentials stored) or after a 401 response.
   - HTTP 404 or 503: "Server not reachable — check the server URL"
   - Any other non-200 response: "Connection failed (HTTP {status_code})"
 - If credentials already exist, this screen is skipped at startup.
-- The Server URL and credential fields are pre-filled with the currently saved values whenever credentials are already stored — both when navigated to via the **Change server** button in Settings and when redirected after a 401 response.
+- The Server URL and Username fields are pre-filled with the currently saved values whenever credentials are already stored — both when navigated to via the **Change server** button in Settings and when redirected after a 401 response. The Password field is always left blank to avoid exposing the plaintext password in UI state. If the user taps **Connect** with the Password field empty, the previously stored password is reused unchanged; if the user types a new password, that value replaces the stored one.
 
 
 ---
@@ -468,10 +485,25 @@ Back behaviour on Android).
 - **Body section:** displays `body_text` in a `SelectionContainer` with a monospace
   font (plain text only in v1).
 - **Attachments section:** lists all attachments by name and size. Tapping an
-  attachment downloads it via `GET /api/v1/attachments/{id}`, writes it to the app's
-  cache directory (`getCacheDir()`), and opens it with `ACTION_VIEW` using a
-  `FileProvider` URI (authority: `nu.staldal.mymail.fileprovider`). No
-  `WRITE_EXTERNAL_STORAGE` permission is needed on API 29+.
+  attachment downloads it via `GET /api/v1/attachments/{id}`, writes it to a dedicated
+  subdirectory inside the app's cache directory (`getCacheDir()/attachments/`), and
+  opens it with `ACTION_VIEW` using a `FileProvider` URI (authority:
+  `nu.staldal.mymail.fileprovider`). The FileProvider `<paths>` configuration must
+  restrict shared paths to only the `attachments/` subdirectory (not all of
+  `getCacheDir()` or `getFilesDir()`), so that other cached application data cannot be
+  shared via FileProvider URIs. Before opening, check the attachment's `content_type`
+  against a blocklist of dangerous MIME types. If the type is in the blocklist, show an
+  inline error ("This file type cannot be opened for security reasons") and do not call
+  `startActivity` — the file remains cached. Blocked types: `text/html`,
+  `application/xhtml+xml`, `application/x-sh`, `application/x-shellscript`,
+  `application/x-executable`, `application/vnd.android.package-archive`.
+  For permitted types, the `ACTION_VIEW` `Intent` must include
+  `FLAG_GRANT_READ_URI_PERMISSION` (not write) and no additional URI permission flags.
+  Reject downloads whose `Content-Length` exceeds 100 MB; show an inline error message
+  ("Attachment too large to download") and do not write any bytes to disk. Cached
+  attachment files are deleted when the `MessageDetailScreen` leaves the composition
+  (via `DisposableEffect`). No `WRITE_EXTERNAL_STORAGE` permission is needed on
+  API 29+.
 - **Thread section:** fetches `GET /api/v1/messages/{id}/thread`. The thread fetch is
   issued in parallel with the main message fetch (no dependency between the two). If the
   thread fetch fails while the main message fetch succeeded, show an inline error message
@@ -586,7 +618,7 @@ Supports new mail, reply, reply-all, forward, and draft editing.
 | Cc         | Same as To (collapsed by default, expand via button)                           |
 | Bcc        | Same as To (collapsed by default)                                              |
 | Reply-To   | Single plain text field (optional, collapsed by default). Maximum 8192 characters — hard cap. |
-| Subject    | Single-line text field. Maximum 998 characters — hard cap.                     |
+| Subject    | Single-line text field. Maximum 998 characters — hard cap. Strip all CR (`\r`) and LF (`\n`) characters from the subject before saving or sending, to prevent MIME header injection. |
 | Body       | Multi-line plain text field (`OutlinedTextField`, v1 is plain text only)       |
 | Attachments| List of attached files; **Add attachment** button opens the system file picker |
 
@@ -1047,6 +1079,12 @@ Remove the default `WorkManager` initializer from `AndroidManifest.xml` by addin
 The background worker persists the last-known Inbox unread count in `SharedPreferences`
 file `"mymail_prefs"` under the key `"inbox_unread_count"`. This is the same
 `SharedPreferences` file used by the Preferences tab for non-sensitive app settings.
+
+**Storage separation:** `"mymail_prefs"` (plain `SharedPreferences`) must contain only
+non-sensitive values: `inbox_unread_count`, dark-mode preference, message-list density
+preference, and the new-mail notification preference. The server URL, username, and
+password must be stored exclusively in `EncryptedSharedPreferences` and must never be
+written to plain `SharedPreferences`.
 
 The background worker is enqueued immediately after a successful Connect on the Setup
 screen, and again on app cold-start if credentials are already stored, using
