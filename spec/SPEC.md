@@ -346,8 +346,8 @@ User-created folders always have `id ≥ 100`.
   - Date (adaptive format matching the web UI rules)
   - Attachment indicator icon
   - `send_failed` badge (boolean field, present in both the message-list and detail
-    response models): shown only in Scheduled (yellow) and Drafts (red); the flag
-    does not appear in other folders
+    response models): shown only in Scheduled (yellow) and Drafts (red); the badge
+    is not shown in other folders
 - Row height adapts to the **Message list density** preference: Compact — 56 dp,
   Normal — 72 dp (default), Relaxed — 88 dp. The `send_failed` badge and attachment
   indicator icon are always vertically centred within the row regardless of the row
@@ -360,6 +360,8 @@ User-created folders always have `id ≥ 100`.
 - **Empty state:** When the initial load returns 0 items, show a centred "No messages"
   text. **Error state on initial load:** Show a centred error message with a Retry
   button (the network-error Snackbar still fires; the inline Retry is additional).
+  Exception: a 404 response (folder no longer exists) navigates back to the Folder
+  List with a Snackbar error, per the Error Handling table — no inline Retry is shown.
 - Pull-to-refresh reloads from offset 0. Refresh replaces the entire in-memory list
   with only the first page result; previously loaded pages beyond page 1 are discarded.
 - **Mark all as read** action in the overflow menu (visible in normal mode only; hidden
@@ -368,25 +370,37 @@ User-created folders always have `id ≥ 100`.
   style without reloading from the server) and update the folder's unread-count badge to 0.
   New pages loaded via infinite scroll after a mark-all-read will have `read: true` from
   the server (the operation marks all messages atomically), so no visual inconsistency
-  occurs for pages not yet in memory.
+  occurs for pages not yet in memory. On failure, show a Snackbar with the error message;
+  the message list is not modified.
 - **Empty folder** action (Trash and Junk only) calls
-  `DELETE /api/v1/folders/{folder_id}/messages` after a confirmation dialog.
+  `DELETE /api/v1/folders/{folder_id}/messages` after a confirmation dialog. On 200
+  success, reload the message list from offset 0 (the folder is now empty). On failure,
+  show a Snackbar with the error message.
 - Multi-select mode is not available in Drafts, Scheduled, or Snoozed folders — long-press
   has no effect in those folders. This prevents issuing bulk operations that the server
   rejects with 400 for messages in those folders.
-- Long-press a message (in any other folder) to enter multi-select mode. Toolbar actions
-  in multi-select:
+- Long-press a message (in any other folder) to enter multi-select mode. During
+  multi-select, the Compose FAB is hidden and the top app bar is replaced by a
+  contextual action bar displaying the selected-item count and the three action buttons
+  below. Toolbar actions in multi-select:
   - **Mark read / unread** — `PATCH /api/v1/messages` with `{"ids": […], "read": true/false}`.
     This bulk endpoint is distinct from the single-message `PATCH /api/v1/messages/{id}`
     used in Message Detail; both must be defined in the OpenAPI spec.
+    On success, update the read state of the affected rows locally. On 400 or 404, show a
+    Snackbar with the server error message; no local changes are made.
   - **Move to folder** (folder picker dialog) — `POST /api/v1/messages/move` with body
     `{"ids": […], "folder_id": targetFolderId}`. The folder picker lists all folders
     except Scheduled, Snoozed, Drafts, and the current folder (consistent with the
-    Message Detail picker).
-  - **Delete** — `DELETE /api/v1/messages` with `{"ids": […]}`.
+    Message Detail picker). On success, remove the affected rows from the list and exit
+    multi-select. On 400 or 404, show a Snackbar with the server error message; no local
+    changes are made.
+  - **Delete** — `DELETE /api/v1/messages` with `{"ids": […]}`. On success, remove the
+    affected rows from the list and exit multi-select. On 400 or 404, show a Snackbar
+    with the server error message; no local changes are made.
 
-Pressing the system Back button while in multi-select mode exits multi-select (same as
-the standard contextual-action-bar Back behaviour on Android).
+Pressing the system Back button while in multi-select mode exits multi-select and
+restores the normal top app bar and Compose FAB (same as the standard contextual-action-bar
+Back behaviour on Android).
 
 
 ---
@@ -424,8 +438,9 @@ the standard contextual-action-bar Back behaviour on Android).
   displayed normally. Shown as a collapsible list of message summaries below the body,
   expanded by default.
   Tapping a summary navigates to that message's detail screen; pressing Back from there
-  returns directly to the Message List (not to the originating detail screen). Implement
-  using:
+  returns to whichever screen was below the originating detail entry in the back-stack (the
+  Message List when navigated from there, or Search when navigated from a search result).
+  Implement using:
   ```kotlin
   navController.navigate("message/$threadMsgId") {
       popUpTo("message/$currentMsgId") { inclusive = true }
@@ -472,13 +487,15 @@ show a Snackbar with the server error message.
 
 **Discard** calls `DELETE /api/v1/drafts/{id}` after a confirmation dialog. On 204
 success, call `navController.popBackStack()` to return to the Message List and trigger a
-full list refresh so the discarded draft no longer appears.
+full list refresh so the discarded draft no longer appears. On 404 (draft was already
+discarded from another client — race condition), show a Snackbar ("Draft already
+discarded") and call `navController.popBackStack()`.
 
 The **Delete** action in Junk and Trash folders is permanent. Show a confirmation dialog
 before proceeding (same pattern as Discard in Drafts).
 
 **Cancel scheduled send** calls `DELETE /api/v1/scheduled/{id}`, which moves the message to
-Drafts (not permanent deletion — `DELETE /messages/{id}` rejects Scheduled messages with
+Drafts (not permanent deletion — `DELETE /api/v1/messages/{id}` rejects Scheduled messages with
 400). Show a confirmation dialog before proceeding. On success, call
 `navController.popBackStack()` to return to the Message List and trigger a full list
 refresh. On 404 (the scheduler already sent or moved the message before the user
@@ -490,7 +507,9 @@ to the folder it was in before snoozed (or Inbox if that folder was deleted). No
 confirmation dialog. On success, call `navController.popBackStack()` to return to the
 Snoozed Message List and trigger a full list refresh so the message no longer appears.
 On 400 (message is no longer in the Snoozed folder — race condition), show a Snackbar
-with the server error message and call `navController.popBackStack()`.
+with the server error message and call `navController.popBackStack()`. On 404 (message
+no longer exists — race condition), show a Snackbar with the server error message and
+call `navController.popBackStack()`.
 
 The **Move** action (single message) calls `POST /api/v1/messages/move` with body
 `{"ids": [id], "folder_id": targetFolderId}` — the same bulk endpoint used in
@@ -514,7 +533,7 @@ Supports new mail, reply, reply-all, forward, and draft editing.
 | Field      | Notes                                                                          |
 |------------|--------------------------------------------------------------------------------|
 | From       | `DropdownMenu` populated from `GET /api/v1/identities`. For new compose, pre-select the identity with `is_default: true`. For Reply/Reply-All, pre-select the identity whose address matches a To or Cc address of the source message; fall back to the default identity if no match is found. |
-| To         | Chip text field with autocomplete from `GET /api/v1/contacts?q=…&limit=10`. Autocomplete fires after the user types at least 1 character, debounced at 300 ms. Maximum 8192 characters (RFC 5322 comma-separated addresses). |
+| To         | Chip text field with autocomplete from `GET /api/v1/contacts?q=…&limit=10`. Autocomplete fires after the user types at least 1 character, debounced at 300 ms. When the text input is cleared, close the dropdown and show no suggestions. When the query returns no contacts, close the dropdown (no "no results" item). Maximum 8192 characters (RFC 5322 comma-separated addresses). |
 | Cc         | Same as To (collapsed by default, expand via button)                           |
 | Bcc        | Same as To (collapsed by default)                                              |
 | Reply-To   | Single plain text field (optional, collapsed by default). Maximum 8192 characters. |
@@ -524,8 +543,9 @@ Supports new mail, reply, reply-all, forward, and draft editing.
 
 **Pre-population for Reply / Reply All / Forward:**
 Fetch the source message (`GET /api/v1/messages/{id}`) and identities
-(`GET /api/v1/identities`) in parallel. If either fetch fails, show a centred error with
-a Retry button and do not populate any fields until both succeed. Pre-fill fields as
+(`GET /api/v1/identities`) in parallel. While the fetches are in-flight, show a circular
+progress indicator over disabled/blank fields. If either fetch fails, show a centred error
+with a Retry button and do not populate any fields until both succeed. Pre-fill fields as
 follows:
 
 | Field   | Reply                                              | Reply All                                                                 | Forward          |
@@ -606,7 +626,12 @@ existing server-side attachments shown as removable chips). There is no dedicate
 `GET /api/v1/drafts/{id}` endpoint — drafts are regular messages accessible via the
 messages endpoint. To pre-populate the From dropdown, match the draft's `from_addr`
 against the fetched identities list (case-insensitive address comparison); if no identity
-matches, pre-select the default identity. If this fetch fails, show a
+matches, pre-select the default identity. To pre-populate the address chip fields (To,
+Cc, Bcc), parse the `to_addr`, `cc_addr`, and `bcc_addr` strings from the `MessageDetail`
+response as RFC 5322 comma-separated address lists into individual chips; each chip
+displays the display name if present, or the bare email address otherwise. A correct
+parser must handle quoted display names that contain commas (e.g.
+`"Smith, Alice" <a@b.com>`). If this fetch fails, show a
 centred error message with a Retry button and do not start the auto-save loop until the
 fetch succeeds — this prevents the loop from overwriting the server draft with blank
 fields. Pre-populating fields from the fetched draft does not set the dirty flag; only
@@ -636,15 +661,21 @@ is needed for v1.
 The auto-save request body is a `DraftRequest` JSON object with fields: `identity_id`
 (integer — the ID of the selected identity from the From dropdown), `to_addr` (string),
 `cc_addr` (string), `bcc_addr` (string), `reply_to_addr` (string, may be empty),
-`subject` (string), `body_text` (string). The `body_html` and `send_at` fields are
-intentionally omitted — v1 is plain-text only, and scheduled send is out of scope; their
-absence in a PUT causes the server to clear those fields, which is the correct behaviour.
-Address fields use RFC 5322 comma-separated format for multiple addresses
-(e.g. `"Alice <a@b.com>, Bob <c@d.com>"`). For Reply and Reply-All, also include
+`subject` (string), `body_text` (string). For Reply and Reply-All, also include
 `in_reply_to` and `references` as described above — these fields are present in every
-save call for the lifetime of the reply draft. It never uploads, creates, or deletes
-attachments; attachments are handled via immediate upload on file selection (see
-Attachments section) and immediate delete for existing draft attachments.
+save call (both `POST` and every `PUT`) for the lifetime of the reply draft. For all
+other modes (new compose, Forward, draft edit), omit `in_reply_to` and `references`.
+The `body_html` and `send_at` fields are intentionally omitted — v1 is plain-text only,
+and scheduled send is out of scope; their absence in a PUT causes the server to clear
+those fields, which is the correct behaviour. Address fields use RFC 5322
+comma-separated format for multiple addresses (e.g. `"Alice <a@b.com>, Bob <c@d.com>"`).
+Note: for Forward, the initial `POST /api/v1/drafts` additionally includes
+`source_message_id` as described in the Forward pre-population paragraph above; all
+subsequent `PUT` calls for Forward omit it. No auto-save status indicator is shown to
+the user; the only auto-save feedback is the failure Snackbar ("Draft could not be
+saved — will retry"). It never uploads, creates, or deletes attachments; attachments
+are handled via immediate upload on file selection (see Attachments section) and
+immediate delete for existing draft attachments.
 
 **Send:**
 The Send button is disabled when all three recipient fields (To, Cc, Bcc) are empty;
@@ -661,6 +692,9 @@ On 400/500 show the server error message inline above the Send button and restar
 auto-save loop so subsequent edits continue to be auto-saved. If a `draftId` was obtained
 via a synchronous `POST /api/v1/drafts` immediately before the send attempt, it is
 retained; the restarted auto-save loop uses `PUT /api/v1/drafts/{id}` from that point on.
+On 404 (draft was discarded from another client between the auto-save and the send), show
+the server error message inline above the Send button; do not restart the auto-save loop
+since the draft no longer exists on the server.
 
 **Attachments:**
 Attach files using `ActivityResultContracts.GetMultipleContents`. Newly added files are
@@ -707,6 +741,9 @@ For draft edits, existing server-side attachments are shown as removable chips; 
   (exclusive upper bound). Use `ZonedDateTime.of(localDate, LocalTime.MIDNIGHT,
   ZoneId.systemDefault())` to produce an RFC 3339 timestamp with the correct timezone
   offset (e.g. `2025-01-15T00:00:00+02:00`).
+- Do not issue a search request when the query string is empty or whitespace-only; display
+  an initial placeholder state (e.g. "Enter a search query") instead. The server returns
+  400 for empty/whitespace queries.
 - Whenever the query text or any date filter changes, reset `offset` to 0 and discard
   previously loaded results before issuing a new request. Pull-to-refresh reloads from
   offset 0 with the current filters applied.
@@ -762,6 +799,10 @@ endpoints:
 | Rename    | `PATCH /api/v1/folders/{id}`      |
 | Delete    | `DELETE /api/v1/folders/{id}`     |
 
+For Create and Rename, on 409 Conflict (duplicate folder name), show the server error
+message inline in the dialog. For Rename, on 404 (folder was deleted between list load
+and the rename attempt), close the dialog and show a Snackbar with the error message.
+
 **Filters tab:** Fetches `GET /api/v1/filters` on enter. Show an inline error with a
 Retry button if the fetch fails. Each filter row shows the filter name on the first line
 and a one-line summary on the second line. Build the summary as follows:
@@ -802,9 +843,10 @@ first line and the email on the second line. Show an inline error with a Retry b
 the initial fetch fails; if a subsequent infinite-scroll page fetch fails, show an inline
 error with a Retry button at the bottom of the list (retries the same page at the failed
 `offset`, not a full reload from offset 0). Search field filters via `q=`;
-keystrokes are debounced with a 300 ms delay before issuing a request. When the query
-changes, reset `offset` to 0 and discard previously loaded results before issuing a new
-request. Infinite scroll with `offset += 50`; stop paginating when the returned count is
+keystrokes are debounced with a 300 ms delay before issuing a request. When the search
+field is cleared, re-issue the request with no `q=` parameter to restore the full
+paginated list. When the query changes (including clearing), reset `offset` to 0 and
+discard previously loaded results before issuing a new request. Infinite scroll with `offset += 50`; stop paginating when the returned count is
 less than 50. Tapping a contact opens an edit dialog; a **+** FAB creates a new contact.
 Both add and edit dialogs have Name (optional) and Email (required, RFC 5322 addr-spec)
 fields. On 409 Conflict (duplicate address), show the server error message inline in the
@@ -847,7 +889,8 @@ behaviour — the first poll after recreation does not fire a notification. The 
 in-memory baseline (reset on each app launch); no notification fires on that first
 result. On every subsequent poll, when the Inbox `unread_count` is higher than the
 previous value, fire an Android notification (if permission granted and preference
-enabled) and update the unread badge. If a poll fails (network error or non-401 HTTP
+enabled) and update the in-memory baseline to the new `unread_count`. (The launcher
+badge count is derived automatically from active notifications, not managed directly.) If a poll fails (network error or non-401 HTTP
 error), log the failure and continue — no UI is shown, and the next 30-second tick
 retries automatically. A 401 response is handled by the `AuthEventBus` path (see
 Authentication section) and is not specific to the poller.
@@ -1061,7 +1104,7 @@ to version control.
   filters is deferred to v1+
 - Scheduled send — no "Send later" in Compose; Scheduled folder is accessible for reading
   and cancelling the scheduled send (which moves the message back to Drafts); direct
-  deletion via `DELETE /messages/{id}` is rejected by the API for Scheduled messages
+  deletion via `DELETE /api/v1/messages/{id}` is rejected by the API for Scheduled messages
 - Folder reordering (entirely out of scope for v1)
 - Drag-to-reorder for filters and identities (tap-to-reorder with up/down arrows as
   a simpler alternative is acceptable for v1)
