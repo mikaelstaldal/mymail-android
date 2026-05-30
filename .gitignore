@@ -1,1 +1,25 @@
 /ignored/
+
+# Gradle
+.gradle/
+build/
+**/build/
+local.properties
+
+# Android Studio
+*.iml
+.idea/
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Generated sources (regenerated on clean build)
+app/build/generated/openapi/
+
+# Keystore files
+*.jks
+*.keystore
+
+# Google Services
+google-services.json
