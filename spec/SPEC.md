@@ -24,6 +24,7 @@ over its REST API. No offline support in v1 (may be added later).
 | Dependency injection | Hilt                                                 |
 | Credentials storage  | `EncryptedSharedPreferences`                         |
 | Background polling   | WorkManager (periodic work request)                  |
+| RFC 5322 parsing     | Apache MIME4J (`org.apache.james:apache-mime4j-core`) |
 
 
 ---
@@ -219,7 +220,7 @@ Shown on first launch (no credentials stored) or after a 401 response.
   - HTTP 404 or 503: "Server not reachable — check the server URL"
   - Any other non-200 response: "Connection failed (HTTP {status_code})"
 - If credentials already exist, this screen is skipped at startup.
-- The Server URL and Username fields are pre-filled with the currently saved values whenever credentials are already stored — both when navigated to via the **Change server** button in Settings and when redirected after a 401 response. The Password field is always left blank to avoid exposing the plaintext password in UI state. If the user taps **Connect** with the Password field empty, the previously stored password is reused unchanged; if the user types a new password, that value replaces the stored one.
+- The Server URL and Username fields are pre-filled with the currently saved values whenever credentials are already stored — both when navigated to via the **Change server** button in Settings and when redirected after a 401 response. The Password field is always left blank to avoid exposing the plaintext password in UI state. Track whether the Password field has been edited by the user (using a `passwordTouched` flag set on the first keystroke). If the user taps **Connect** and the Password field is empty and `passwordTouched` is false, the previously stored password is reused unchanged. If `passwordTouched` is true but the field is empty (the user deliberately cleared it), show an inline validation error: "Password is required". If the user types a new password, that value replaces the stored one.
 
 
 ---
@@ -333,6 +334,12 @@ Both keys are always set before `popBackStack()`, regardless of which screen is 
 in the back-stack. The Message List only observes `needsRefresh`; Search only observes
 `removedMessageId`. Each screen ignores the key it does not use.
 
+The two strategies differ intentionally: Message List always shows a single folder, so a
+full reload from offset 0 is cheap and keeps the list consistent with the server. Search
+results span multiple folders with a user-specified query; re-running the search after
+every back-navigation would be jarring, so the single removed message is struck from the
+in-memory list instead.
+
 
 ---
 
@@ -416,10 +423,11 @@ User-created folders always have `id ≥ 100`.
   the server (the operation marks all messages atomically), so no visual inconsistency
   occurs for pages not yet in memory. On failure, show a Snackbar with the error message;
   the message list is not modified.
-- **Empty folder** action (Trash and Junk only) calls
-  `DELETE /api/v1/folders/{folder_id}/messages` after a confirmation dialog. On 200
-  success, reload the message list from offset 0 (the folder is now empty). On failure,
-  show a Snackbar with the error message.
+- **Empty folder** action (Trash and Junk only) appears in the overflow menu, hidden
+  while multi-select is active. Calls `DELETE /api/v1/folders/{folder_id}/messages` after
+  a confirmation dialog with the message "Permanently delete all messages in this folder?".
+  On 200 success, reload the message list from offset 0 (the folder is now empty). On
+  failure, show a Snackbar with the error message.
 - Multi-select mode is not available in Drafts, Scheduled, or Snoozed folders — long-press
   has no effect in those folders. This prevents issuing bulk operations that the server
   rejects with 400 for messages in those folders.
@@ -492,11 +500,14 @@ Back behaviour on Android).
   restrict shared paths to only the `attachments/` subdirectory (not all of
   `getCacheDir()` or `getFilesDir()`), so that other cached application data cannot be
   shared via FileProvider URIs. Before opening, check the attachment's `content_type`
-  against a blocklist of dangerous MIME types. If the type is in the blocklist, show an
-  inline error ("This file type cannot be opened for security reasons") and do not call
-  `startActivity` — the file remains cached. Blocked types: `text/html`,
-  `application/xhtml+xml`, `application/x-sh`, `application/x-shellscript`,
-  `application/x-executable`, `application/vnd.android.package-archive`.
+  from `AttachmentMeta` (not the download response `Content-Type` header, which is always
+  `application/octet-stream`) against a blocklist of dangerous MIME types. Strip MIME
+  parameters before comparing (e.g. `text/html; charset=utf-8` → `text/html`). If the
+  type is in the blocklist, show an inline error ("This file type cannot be opened for
+  security reasons") and do not call `startActivity` — the file remains cached. Blocked
+  types: `text/html`, `application/xhtml+xml`, `application/x-sh`,
+  `application/x-shellscript`, `application/x-executable`,
+  `application/vnd.android.package-archive`.
   For permitted types, the `ACTION_VIEW` `Intent` must include
   `FLAG_GRANT_READ_URI_PERMISSION` (not write) and no additional URI permission flags.
   Reject downloads whose `Content-Length` exceeds 100 MB; show an inline error message
@@ -694,9 +705,12 @@ block at the bottom of the body is replaced with the new identity's signature (o
 if the new identity has no signature). Only the trailing signature block is replaced; any
 text the user has typed above it is preserved. Track the current signature string so the
 replacement can be found precisely by searching for `\n\n-- \n<currentSignature>` at the
-end of the body string. When the initial identity had an empty signature (so no delimiter
-was ever appended) and the user switches to an identity with a non-empty signature, there
-is no existing `\n\n-- \n` to search for; in that case simply append `\n\n-- \n<newSignature>`
+end of the body string. If this exact match fails (the user may have edited the signature
+text directly in the body), fall back to searching for the last occurrence of `\n\n-- \n`
+in the body and treat everything from that point to the end as the signature block to
+replace. When the initial identity had an empty signature (so no delimiter was ever
+appended) and the user switches to an identity with a non-empty signature — and no
+`\n\n-- \n` delimiter is found anywhere in the body — simply append `\n\n-- \n<newSignature>`
 at the end of the body.
 
 For Forward, pass `source_message_id` in the initial `POST /api/v1/drafts` body so the
@@ -725,9 +739,10 @@ address string to extract the bare addr-spec (e.g. `"Alice Smith" <alice@example
 using case-insensitive comparison; if no identity matches, pre-select the default identity. To pre-populate the address chip fields (To,
 Cc, Bcc), parse the `to_addr`, `cc_addr`, and `bcc_addr` strings from the `MessageDetail`
 response as RFC 5322 comma-separated address lists into individual chips; each chip
-displays the display name if present, or the bare email address otherwise. A correct
-parser must handle quoted display names that contain commas (e.g.
-`"Smith, Alice" <a@b.com>`). If this fetch fails, show a
+displays the display name if present, or the bare email address otherwise. Use
+`org.apache.james:apache-mime4j-core` (`MimeUtility` / `AddressList.parse()`) for all
+RFC 5322 address parsing throughout the app — it correctly handles quoted display names
+that contain commas (e.g. `"Smith, Alice" <a@b.com>`) and other edge cases. If this fetch fails, show a
 centred error message with a Retry button and do not start the auto-save loop until the
 fetch succeeds — this prevents the loop from overwriting the server draft with blank
 fields. Pre-populating fields from the fetched draft does not set the dirty flag; only
@@ -833,6 +848,10 @@ the user can retry by tapping a Retry button in the attachments area.
 For draft edits, existing server-side attachments are shown as removable chips; tapping
 × calls `DELETE /api/v1/drafts/{id}/attachments/{attachment_id}` immediately.
 
+Re-downloaded attachment files cached in `getCacheDir()/attachments/` during the
+re-upload flow are deleted when the Compose screen leaves the composition (via
+`DisposableEffect`), consistent with the Message Detail attachment cleanup policy.
+
 
 ---
 
@@ -860,10 +879,12 @@ For draft edits, existing server-side attachments are shown as removable chips; 
   previously loaded results before issuing a new request. Pull-to-refresh reloads from
   offset 0 with the current filters applied.
 - Results rendered as a `LazyColumn` of message summaries, each showing the FTS
-  `snippet` below the subject. The snippet contains matched keywords surrounded by `**`
-  markers (e.g. `…the **keyword** in…`). Parse these markers and render matched terms in
-  bold using `AnnotatedString` with `SpanStyle(fontWeight = FontWeight.Bold)`; strip the
-  `**` delimiters from the displayed text.
+  `snippet` below the subject. The `snippet` field is guaranteed non-null in search
+  results (it is in the `required` list of the search response schema). The snippet
+  contains matched keywords surrounded by `**` markers (e.g. `…the **keyword** in…`).
+  Parse these markers and render matched terms in bold using `AnnotatedString` with
+  `SpanStyle(fontWeight = FontWeight.Bold)`; strip the `**` delimiters from the displayed
+  text.
 - Tapping a result navigates to Message Detail.
 - When returning from Message Detail after a destructive action (Delete, Move, Discard,
   Mark as junk, etc.), the Search screen observes the `removedMessageId` key on its
@@ -1155,7 +1176,9 @@ back-navigation into it, and screen rotation each cause a new composition entry)
 **Auto-retry exclusion for Send:** `POST /api/v1/drafts/{id}/send` is not idempotent —
 a timeout may occur after the server already dispatched the email. The auto-retry policy
 does **not** apply to the send call. On a network error or timeout during send, show the
-`Snackbar` with a Retry action but do not automatically retry after 2 seconds.
+`Snackbar` with a Retry action but do not automatically retry after 2 seconds. The
+synchronous `POST /api/v1/drafts` call that may precede the send (when no `draftId` exists
+yet) is a separate, idempotent-safe operation and does follow the normal auto-retry policy.
 
 
 ---
