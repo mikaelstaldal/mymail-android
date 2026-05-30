@@ -427,7 +427,7 @@ User-created folders always have `id ≥ 100`.
   - **Delete** — `DELETE /api/v1/messages` with `{"ids": […]}`. When the current folder is
     Trash or Junk, deletion is permanent — show a confirmation dialog before proceeding
     (consistent with single-message Delete in those folders). For all other folders,
-    messages are moved to Trash and no confirmation is required. On success, remove the
+    messages are moved to Trash and no confirmation is required. On 200 success, remove the
     affected rows from the list and exit multi-select. On 400 or 404, show a Snackbar
     with the server error message; no local changes are made.
 
@@ -454,11 +454,17 @@ Back behaviour on Android).
   (`folder_id == SNOOZED_ID`), additionally show a **Snoozed until** row displaying the
   `snoozed_until` timestamp in the full date format (`EEE, d MMM yyyy, HH:mm z`). If
   `snoozed_until` is null (should not occur for correctly-stored Snoozed messages, but
-  handled defensively), omit the row entirely.
+  handled defensively), omit the row entirely. For messages in the Scheduled folder
+  (`folder_id == SCHEDULED_ID`), additionally show a **Scheduled for** row displaying the
+  `send_at` timestamp in the full date format (`EEE, d MMM yyyy, HH:mm z`). If `send_at`
+  is null (should not occur for correctly-stored Scheduled messages, but handled
+  defensively), omit the row entirely.
 - **`send_failed` banner:** Show a banner immediately below the header only when
   `send_failed: true` AND `folder_id` is either `SCHEDULED_ID` (yellow) or `DRAFTS_ID`
   (red). Hidden in all other folders, including Trash where `send_failed` may be `true`
-  but the message is no longer actionable.
+  but the message is no longer actionable. The `send_error` field (sendmail stderr from
+  the last failed attempt) is not displayed in the UI; if non-null, log it at `Log.w` level
+  for debugging.
 - **Body section:** displays `body_text` in a `SelectionContainer` with a monospace
   font (plain text only in v1).
 - **Attachments section:** lists all attachments by name and size. Tapping an
@@ -555,11 +561,12 @@ The **Move** action (single message) calls `POST /api/v1/messages/move` with bod
 `{"ids": [id], "folder_id": targetFolderId}` — the same bulk endpoint used in
 multi-select, with a single-element array.
 
-After a successful **Move**, **Delete**, **Discard**, **Mark as junk**, **Not junk**, **Cancel
-scheduled send**, or **Cancel snooze** from Message Detail, call
-`navController.popBackStack()` to return to the Message List and trigger a full list
-refresh (reload from offset 0) so the affected message no longer appears. Use the
-navigation result mechanism described in [Navigation results for list refresh](#navigation-results-for-list-refresh).
+All the destructive actions above (**Move**, **Delete**, **Discard**, **Mark as junk**,
+**Not junk**, **Cancel scheduled send**, **Cancel snooze**) call `navController.popBackStack()`
+as documented in each paragraph above — do not add a second `popBackStack()` call here.
+Each of these calls must be preceded by setting the navigation result keys on the
+previous back-stack entry as described in [Navigation results for list refresh](#navigation-results-for-list-refresh), so that the Message List reloads
+from offset 0 when the user returns to it.
 
 
 ---
@@ -573,7 +580,7 @@ Supports new mail, reply, reply-all, forward, and draft editing.
 | Field      | Notes                                                                          |
 |------------|--------------------------------------------------------------------------------|
 | From       | `DropdownMenu` populated from `GET /api/v1/identities`. For new compose, pre-select the identity with `is_default: true`. For Reply/Reply-All, pre-select the identity whose address matches a To or Cc address of the source message; fall back to the default identity if no match is found. |
-| To         | Chip text field with autocomplete from `GET /api/v1/contacts?q=…&limit=10`. Autocomplete fires after the user types at least 1 character, debounced at 300 ms. When the text input is cleared, close the dropdown and show no suggestions. When the query returns no contacts, close the dropdown (no "no results" item). Maximum 8192 characters (RFC 5322 comma-separated addresses) — enforce as a hard cap (stop accepting input at the limit). |
+| To         | Chip text field with autocomplete from `GET /api/v1/contacts?q=…&limit=10`. Autocomplete fires after the user types at least 1 character, debounced at 300 ms. When the text input is cleared, close the dropdown and show no suggestions. When the query returns no contacts, close the dropdown (no "no results" item). When the response `total` exceeds 10, show a non-selectable hint item "Type more to narrow…" at the bottom of the dropdown instead of paginating. Tapping a suggestion adds a chip; the chip displays the contact's `name` if non-empty, otherwise the bare `address`; the chip encodes the address in RFC 5322 format (`"Name" <address>` when name is non-empty, bare `address` otherwise) for use in the `to_addr` / `cc_addr` / `bcc_addr` save fields. The user may also type an address manually and commit it as a chip by pressing Enter, comma, or Tab; no client-side RFC 5322 validation is performed — invalid addresses are accepted and reported by the server as a 400 on Send. Maximum 8192 characters (RFC 5322 comma-separated addresses) — enforce as a hard cap (stop accepting input at the limit). |
 | Cc         | Same as To (collapsed by default, expand via button)                           |
 | Bcc        | Same as To (collapsed by default)                                              |
 | Reply-To   | Single plain text field (optional, collapsed by default). Maximum 8192 characters — hard cap. |
@@ -691,7 +698,7 @@ subsequent user edits mark the draft dirty. The auto-save loop then uses
 `PUT /api/v1/drafts/{id}` from the very first save and never calls `POST /api/v1/drafts`.
 
 Start an auto-save coroutine on a 30-second `delay` loop. On first save (new compose),
-call `POST /api/v1/drafts` and store the returned `id`. On subsequent saves call
+call `POST /api/v1/drafts` and store the returned `id` from the 201 response. On subsequent saves call
 `PUT /api/v1/drafts/{id}`. Track a dirty flag; mark dirty on any field edit, clear it
 after each successful save. If the first `POST /api/v1/drafts` fails, show a non-blocking informational Snackbar
 ("Draft could not be saved — will retry") with no Retry action button — the auto-save loop
@@ -802,9 +809,10 @@ For draft edits, existing server-side attachments are shown as removable chips; 
   (exclusive upper bound). Use `ZonedDateTime.of(localDate, LocalTime.MIDNIGHT,
   ZoneId.systemDefault())` to produce an RFC 3339 timestamp with the correct timezone
   offset (e.g. `2025-01-15T00:00:00+02:00`).
-- Do not issue a search request when the query string is empty or whitespace-only; display
-  an initial placeholder state (e.g. "Enter a search query") instead. The server returns
-  400 for empty/whitespace queries.
+- The search query field has a maximum length of 500 characters (hard cap, matching the
+  server's `maxLength` validation). Do not issue a search request when the query string is
+  empty or whitespace-only; display an initial placeholder state (e.g. "Enter a search
+  query") instead. The server returns 400 for empty/whitespace queries.
 - Whenever the query text or any date filter changes, reset `offset` to 0 and discard
   previously loaded results before issuing a new request. Pull-to-refresh reloads from
   offset 0 with the current filters applied.
@@ -865,7 +873,7 @@ endpoints:
 | Rename    | `PATCH /api/v1/folders/{id}`      |
 | Delete    | `DELETE /api/v1/folders/{id}`     |
 
-For Create and Rename, on 409 Conflict (duplicate folder name), show the server error
+For Create, on 201 success, dismiss the dialog and reload the folder list. For Create and Rename, on 409 Conflict (duplicate folder name), show the server error
 message inline in the dialog. For Rename, on 404 (folder was deleted between list load
 and the rename attempt), close the dialog and show a Snackbar with the error message.
 
@@ -929,6 +937,11 @@ dialog. Deleting a contact shows a confirmation dialog before calling
 | Create    | `POST /api/v1/contacts`           |
 | Update    | `PUT /api/v1/contacts/{id}`       |
 | Delete    | `DELETE /api/v1/contacts/{id}`    |
+
+For Create, on 201 success dismiss the dialog and reload the list.
+`PUT /api/v1/contacts/{id}` uses **full-replacement semantics**: any field omitted from the
+request body is cleared (omitting `name` sets it to empty string). The dialog must always
+send both `address` and `name` fields, even when `name` is an empty string.
 
 **Preferences tab:** These are stored in regular `SharedPreferences` (not encrypted):
 
