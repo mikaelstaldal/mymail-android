@@ -6,16 +6,16 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ```bash
 # Build debug APK (also runs openApiGenerate)
-./gradlew :app:assembleDebug
+gradle :app:assembleDebug
 
 # Run unit tests
-./gradlew :app:testDebugUnitTest
+gradle :app:testDebugUnitTest
 
 # Regenerate API client from OpenAPI spec
-./gradlew :app:openApiGenerate
+gradle :app:openApiGenerate
 
 # Override spec path (defaults to ../mymail/openapi.yaml)
-./gradlew :app:openApiGenerate -PopenApiSpecPath=/path/to/openapi.yaml
+gradle :app:openApiGenerate -PopenApiSpecPath=/path/to/openapi.yaml
 ```
 
 ## Architecture Overview

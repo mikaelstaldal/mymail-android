@@ -11,19 +11,19 @@ Native Android client for [mymail](https://github.com/mikaelstaldal/mymail), a s
 
 ```bash
 # Debug APK
-./gradlew :app:assembleDebug
+gradle :app:assembleDebug
 
 # Release APK
-./gradlew :app:assembleRelease
+gradle :app:assembleRelease
 
 # Run unit tests
-./gradlew :app:testDebugUnitTest
+gradle :app:testDebugUnitTest
 ```
 
 The build automatically generates the Retrofit API client from the OpenAPI spec at `../mymail/openapi.yaml`. To point at a different spec:
 
 ```bash
-./gradlew :app:assembleDebug -PopenApiSpecPath=/path/to/openapi.yaml
+gradle :app:assembleDebug -PopenApiSpecPath=/path/to/openapi.yaml
 ```
 
 ## Technology Stack
