@@ -196,6 +196,44 @@ fun MessageDetailScreen(
                         .fillMaxSize()
                         .padding(innerPadding),
                 ) {
+                    stickyHeader {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surface,
+                            shadowElevation = 2.dp,
+                        ) {
+                            Column {
+                                ActionBar(
+                                    folderId = folderId,
+                                    onReply = { navController.navigate("compose?replyTo=$messageId") },
+                                    onReplyAll = { navController.navigate("compose?replyAllTo=$messageId") },
+                                    onForward = { navController.navigate("compose?forwardOf=$messageId") },
+                                    onMove = { showMovePicker = true },
+                                    onMarkJunk = {
+                                        viewModel.markJunk(messageId) { setNavResultAndPop() }
+                                    },
+                                    onDelete = {
+                                        if (folderId == JUNK_ID || folderId == TRASH_ID) {
+                                            showDeleteConfirm = true
+                                        } else {
+                                            viewModel.deleteMessage(messageId) { setNavResultAndPop() }
+                                        }
+                                    },
+                                    onEdit = { navController.navigate("compose?draftId=$messageId") },
+                                    onDiscard = { showDiscardConfirm = true },
+                                    onCancelScheduled = { showCancelScheduledConfirm = true },
+                                    onCancelSnooze = {
+                                        viewModel.cancelSnooze(messageId) { setNavResultAndPop() }
+                                    },
+                                    onNotJunk = {
+                                        viewModel.markNotJunk(messageId) { setNavResultAndPop() }
+                                    },
+                                )
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+
                     item {
                         HeaderSection(
                             message = message,
@@ -295,35 +333,6 @@ fun MessageDetailScreen(
                         )
                     }
 
-                    item {
-                        HorizontalDivider()
-                        ActionBar(
-                            folderId = folderId,
-                            onReply = { navController.navigate("compose?replyTo=$messageId") },
-                            onReplyAll = { navController.navigate("compose?replyAllTo=$messageId") },
-                            onForward = { navController.navigate("compose?forwardOf=$messageId") },
-                            onMove = { showMovePicker = true },
-                            onMarkJunk = {
-                                viewModel.markJunk(messageId) { setNavResultAndPop() }
-                            },
-                            onDelete = {
-                                if (folderId == JUNK_ID || folderId == TRASH_ID) {
-                                    showDeleteConfirm = true
-                                } else {
-                                    viewModel.deleteMessage(messageId) { setNavResultAndPop() }
-                                }
-                            },
-                            onEdit = { navController.navigate("compose?draftId=$messageId") },
-                            onDiscard = { showDiscardConfirm = true },
-                            onCancelScheduled = { showCancelScheduledConfirm = true },
-                            onCancelSnooze = {
-                                viewModel.cancelSnooze(messageId) { setNavResultAndPop() }
-                            },
-                            onNotJunk = {
-                                viewModel.markNotJunk(messageId) { setNavResultAndPop() }
-                            },
-                        )
-                    }
                 }
 
                 if (showDiscardConfirm) {
