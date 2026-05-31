@@ -600,6 +600,8 @@ private fun ThreadSection(
     onRetry: () -> Unit,
     onNavigateToMessage: (Long) -> Unit,
 ) {
+    if (threadState is ThreadUiState.Success && threadState.thread.items.size <= 1) return
+
     var expanded by remember { mutableStateOf(true) }
 
     Column(modifier = Modifier.fillMaxWidth()) {
