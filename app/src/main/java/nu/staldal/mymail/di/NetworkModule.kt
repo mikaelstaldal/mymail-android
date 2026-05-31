@@ -13,6 +13,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
+import org.openapitools.client.infrastructure.Serializer
 import retrofit2.Retrofit
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -27,7 +28,10 @@ class RetrofitHolder(initialRetrofit: Retrofit) {
 
     fun rebuild(serverUrl: String, okHttpClient: OkHttpClient) {
         val baseUrl = serverUrl.trimEnd('/') + "/api/v1/"
-        val json = Json { ignoreUnknownKeys = true }
+        val json = Json {
+            serializersModule = Serializer.kotlinxSerializationAdapters
+            ignoreUnknownKeys = true
+        }
         val contentType = "application/json".toMediaType()
         val retrofit = Retrofit.Builder()
             .baseUrl(baseUrl)
@@ -75,7 +79,10 @@ object NetworkModule {
             "http://localhost/api/v1/"
         }
 
-        val json = Json { ignoreUnknownKeys = true }
+        val json = Json {
+            serializersModule = Serializer.kotlinxSerializationAdapters
+            ignoreUnknownKeys = true
+        }
         val contentType = "application/json".toMediaType()
         val retrofit = Retrofit.Builder()
             .baseUrl(baseUrl)

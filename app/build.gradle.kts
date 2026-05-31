@@ -60,6 +60,7 @@ openApiGenerate {
             .getOrElse("$rootDir/../mymail/openapi.yaml")
     )
     outputDir.set(layout.buildDirectory.dir("generated/openapi").get().asFile.absolutePath)
+    templateDir.set("$rootDir/kotlin-client")
     apiPackage.set("nu.staldal.mymail.api")
     modelPackage.set("nu.staldal.mymail.model")
     configOptions.set(

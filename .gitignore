@@ -16,7 +16,6 @@ captures/
 
 ### Kotlin ###
 .kotlin
-kotlin-client
 
 # Generated sources (regenerated on clean build)
 app/build/generated/openapi/
