@@ -26,8 +26,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -725,20 +728,43 @@ private fun ActionBar(
     onCancelSnooze: () -> Unit,
     onNotJunk: () -> Unit,
 ) {
+    var showMoreMenu by remember { mutableStateOf(false) }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         when {
             folderId == INBOX_ID || folderId >= 100L -> {
                 TextButton(onClick = onReply) { Text("Reply") }
                 TextButton(onClick = onReplyAll) { Text("Reply All") }
                 TextButton(onClick = onForward) { Text("Forward") }
-                TextButton(onClick = onMove) { Text("Move") }
-                TextButton(onClick = onMarkJunk) { Text("Junk") }
-                TextButton(onClick = onDelete) { Text("Delete") }
+                Spacer(modifier = Modifier.weight(1f))
+                Box {
+                    IconButton(onClick = { showMoreMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "More actions")
+                    }
+                    DropdownMenu(
+                        expanded = showMoreMenu,
+                        onDismissRequest = { showMoreMenu = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Move") },
+                            onClick = { showMoreMenu = false; onMove() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Junk") },
+                            onClick = { showMoreMenu = false; onMarkJunk() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Delete") },
+                            onClick = { showMoreMenu = false; onDelete() },
+                        )
+                    }
+                }
             }
             folderId == SENT_ID -> {
                 TextButton(onClick = onForward) { Text("Forward") }
