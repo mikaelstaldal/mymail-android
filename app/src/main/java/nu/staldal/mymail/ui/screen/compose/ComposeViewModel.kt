@@ -860,7 +860,7 @@ class ComposeViewModel @Inject constructor(
         if (addrString.isBlank()) return emptyList()
         return try {
             val addressList = DefaultAddressParser.DEFAULT.parseAddressList(addrString)
-            addressList.flatMap { address ->
+            val chips = addressList.flatMap { address ->
                 when (address) {
                     is Mailbox -> listOf(address)
                     is Group -> address.mailboxes.toList()
@@ -878,10 +878,30 @@ class ComposeViewModel @Inject constructor(
                 val rfc = if (!name.isNullOrEmpty()) "\"$name\" <$addr>" else addr
                 AddressChip(displayName = if (!name.isNullOrEmpty()) name else addr, rfcAddress = rfc)
             }
+            chips.ifEmpty { parseAddressChipsFallback(addrString) }
         } catch (e: Exception) {
+            // mime4j rejects non-ASCII display names decoded from MIME encoded-words; fall back to regex
             Log.w(TAG, "Failed to parse address list: $addrString", e)
-            emptyList()
+            parseAddressChipsFallback(addrString)
         }
+    }
+
+    // Regex fallback for addresses that mime4j rejects (e.g. decoded non-ASCII display names)
+    private fun parseAddressChipsFallback(addrString: String): List<AddressChip> {
+        val result = mutableListOf<AddressChip>()
+        // Match optional display name followed by <email@domain>, or bare email@domain
+        val pattern = Regex("""([^<,]*)<([^>]*@[^>]*)>|([^\s,;<>"]+@[^\s,;<>"]+)""")
+        for (match in pattern.findAll(addrString)) {
+            val displayPart = match.groupValues[1].trim().trim('"')
+            val angleEmail = match.groupValues[2].trim()
+            val bareEmail = match.groupValues[3].trim()
+            if (angleEmail.isNotEmpty()) {
+                result.add(AddressChip(displayName = displayPart.ifEmpty { angleEmail }, rfcAddress = angleEmail))
+            } else if (bareEmail.isNotEmpty()) {
+                result.add(AddressChip(displayName = bareEmail, rfcAddress = bareEmail))
+            }
+        }
+        return result
     }
 
     private fun extractAddrSpec(fromAddr: String): String {
