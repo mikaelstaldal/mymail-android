@@ -72,6 +72,9 @@ import nu.staldal.mymail.SCHEDULED_ID
 import nu.staldal.mymail.SENT_ID
 import nu.staldal.mymail.SNOOZED_ID
 import nu.staldal.mymail.TRASH_ID
+import nu.staldal.mymail.intent.buildCalendarInsertIntent
+import nu.staldal.mymail.intent.isCalendarAttachment
+import nu.staldal.mymail.intent.parseIcsEvent
 import nu.staldal.mymail.model.AttachmentMeta
 import nu.staldal.mymail.model.MessageDetail
 import nu.staldal.mymail.model.MessageSummary
@@ -299,14 +302,33 @@ fun MessageDetailScreen(
                                 onTap = {
                                     val attachState = attachmentStates[attachId]
                                     if (attachState is AttachmentState.Ready) {
-                                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                                            setDataAndType(attachState.uri, context.contentResolver.getType(attachState.uri))
-                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        }
-                                        try {
-                                            context.startActivity(intent)
-                                        } catch (_: Exception) {
-                                            scope.launch { snackbarHostState.showSnackbar("No app found to open this file") }
+                                        if (isCalendarAttachment(attachment.contentType, attachment.filename)) {
+                                            scope.launch {
+                                                val content = runCatching {
+                                                    context.contentResolver.openInputStream(attachState.uri)
+                                                        ?.bufferedReader()?.use { it.readText() }
+                                                }.getOrNull()
+                                                val event = content?.let { parseIcsEvent(it) }
+                                                if (event != null) {
+                                                    try {
+                                                        context.startActivity(buildCalendarInsertIntent(event))
+                                                    } catch (_: Exception) {
+                                                        snackbarHostState.showSnackbar("No calendar app found")
+                                                    }
+                                                } else {
+                                                    snackbarHostState.showSnackbar("Could not read calendar event")
+                                                }
+                                            }
+                                        } else {
+                                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(attachState.uri, context.contentResolver.getType(attachState.uri))
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            try {
+                                                context.startActivity(intent)
+                                            } catch (_: Exception) {
+                                                scope.launch { snackbarHostState.showSnackbar("No app found to open this file") }
+                                            }
                                         }
                                     } else if (
                                         attachState !is AttachmentState.Downloading &&

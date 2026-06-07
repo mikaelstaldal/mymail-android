@@ -672,7 +672,9 @@ class ComposeViewModel @Inject constructor(
                 onFailure = { error ->
                     _isSending.value = false
                     val status = (error as? HttpStatusException)?.statusCode
-                    _sendError.value = error.message ?: "Send failed"
+                    val message = error.message ?: "Send failed"
+                    _sendError.value = message
+                    _snackbarMessage.tryEmit(message)
                     if (status != 404) {
                         startAutoSave()
                     }
