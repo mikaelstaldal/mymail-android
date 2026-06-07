@@ -19,6 +19,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import nu.staldal.mymail.intent.ComposeIntentData
+import nu.staldal.mymail.intent.PendingComposeIntentHolder
 import nu.staldal.mymail.model.AttachmentMeta
 import nu.staldal.mymail.model.Contact
 import nu.staldal.mymail.model.DraftRequest
@@ -73,6 +75,7 @@ class ComposeViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val identityRepository: IdentityRepository,
     private val contactRepository: ContactRepository,
+    private val pendingComposeIntentHolder: PendingComposeIntentHolder,
     application: Application,
 ) : AndroidViewModel(application) {
 
@@ -171,12 +174,12 @@ class ComposeViewModel @Inject constructor(
                     val msgId = forwardOf.toLongOrNull() ?: return@launch
                     initForward(msgId)
                 }
-                else -> initNewCompose()
+                else -> initNewCompose(pendingComposeIntentHolder.consume())
             }
         }
     }
 
-    private suspend fun initNewCompose() {
+    private suspend fun initNewCompose(prefill: ComposeIntentData?) {
         _initState.value = ComposeInitState.Loading
         identityRepository.listIdentities().fold(
             onSuccess = { list ->
@@ -188,14 +191,29 @@ class ComposeViewModel @Inject constructor(
                     return
                 }
                 val defaultIdentity = list.firstOrNull { it.isDefault } ?: list.first()
-                selectIdentityInternal(defaultIdentity, initialBody = "", isNew = true)
+                selectIdentityInternal(defaultIdentity, initialBody = prefill?.body ?: "", isNew = true)
+                applyPrefill(prefill)
                 _initState.value = ComposeInitState.Ready
                 startAutoSave()
+                if (prefill != null && prefill.attachmentUris.isNotEmpty()) {
+                    addAttachments(prefill.attachmentUris)
+                }
             },
             onFailure = { error ->
                 _initState.value = ComposeInitState.Error(error.message ?: "Failed to load identities")
             },
         )
+    }
+
+    private fun applyPrefill(prefill: ComposeIntentData?) {
+        if (prefill == null) return
+        if (prefill.to.isNotEmpty()) _toChips.value = parseAddressChips(prefill.to.joinToString(", "))
+        if (prefill.cc.isNotEmpty()) _ccChips.value = parseAddressChips(prefill.cc.joinToString(", "))
+        if (prefill.bcc.isNotEmpty()) _bccChips.value = parseAddressChips(prefill.bcc.joinToString(", "))
+        prefill.subject?.let { raw ->
+            val stripped = raw.replace(Regex("[\r\n]"), "")
+            _subject.value = if (stripped.length > MAX_SUBJECT_CHARS) stripped.take(MAX_SUBJECT_CHARS) else stripped
+        }
     }
 
     private suspend fun initReply(sourceMessageId: Long, replyAll: Boolean) {

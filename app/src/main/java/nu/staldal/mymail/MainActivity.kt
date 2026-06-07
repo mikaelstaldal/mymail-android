@@ -23,6 +23,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import nu.staldal.mymail.auth.AuthEventBus
 import nu.staldal.mymail.auth.CredentialStore
+import nu.staldal.mymail.intent.PendingComposeIntentHolder
+import nu.staldal.mymail.intent.parseComposeIntent
 import nu.staldal.mymail.repository.FolderRepository
 import nu.staldal.mymail.ui.navigation.NavGraph
 import nu.staldal.mymail.ui.theme.MyMailTheme
@@ -42,6 +44,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var authEventBus: AuthEventBus
+
+    @Inject
+    lateinit var pendingComposeIntentHolder: PendingComposeIntentHolder
 
     @Inject
     @Named("plain")
@@ -70,9 +75,20 @@ class MainActivity : ComponentActivity() {
         val hasCredentials = credentialStore.hasCredentials()
         val startDestination = if (hasCredentials) "folders" else "setup"
 
+        // Only act on incoming "send mail" intents (e.g. share-to, mailto: links) once logged in;
+        // otherwise the prefill data would be lost on the way to the setup screen.
+        val composeIntentData = if (hasCredentials) parseComposeIntent(intent) else null
+        composeIntentData?.let { pendingComposeIntentHolder.set(it) }
+
         setContent {
             MyMailTheme {
                 val navController = rememberNavController()
+
+                LaunchedEffect(composeIntentData) {
+                    if (composeIntentData != null) {
+                        navController.navigate("compose")
+                    }
+                }
 
                 // Collect 401 auth events and navigate to setup
                 LaunchedEffect(Unit) {
