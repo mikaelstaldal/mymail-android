@@ -23,14 +23,22 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.automirrored.filled.Forward
+import androidx.compose.material.icons.automirrored.filled.ReplyAll
+import androidx.compose.material.icons.filled.AlarmOff
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Report
+import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -80,7 +88,6 @@ import nu.staldal.mymail.model.MessageDetail
 import nu.staldal.mymail.model.MessageSummary
 import nu.staldal.mymail.utils.formatMessageDetailDate
 import nu.staldal.mymail.utils.formatMessageListDate
-import java.time.OffsetDateTime
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -534,11 +541,11 @@ private fun HeaderSection(
                 HeaderRow("Subject", message.subject.ifBlank { "(no subject)" })
 
                 if (folderId == SNOOZED_ID && message.snoozedUntil != null) {
-                    HeaderRow("Snoozed until", formatMessageDetailDate(message.snoozedUntil!!))
+                    HeaderRow("Snoozed until", formatMessageDetailDate(message.snoozedUntil))
                 }
 
                 if (folderId == SCHEDULED_ID && message.sendAt != null) {
-                    HeaderRow("Scheduled for", formatMessageDetailDate(message.sendAt!!))
+                    HeaderRow("Scheduled for", formatMessageDetailDate(message.sendAt))
                 }
             }
         }
@@ -761,70 +768,90 @@ private fun ActionBar(
     onCancelSnooze: () -> Unit,
     onNotJunk: () -> Unit,
 ) {
-    var showMoreMenu by remember { mutableStateOf(false) }
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         when {
             folderId == INBOX_ID || folderId >= 100L -> {
-                TextButton(onClick = onReply) { Text("Reply") }
-                TextButton(onClick = onReplyAll) { Text("Reply All") }
-                TextButton(onClick = onForward) { Text("Forward") }
-                Spacer(modifier = Modifier.weight(1f))
-                Box {
-                    IconButton(onClick = { showMoreMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "More actions")
-                    }
-                    DropdownMenu(
-                        expanded = showMoreMenu,
-                        onDismissRequest = { showMoreMenu = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Move") },
-                            onClick = { showMoreMenu = false; onMove() },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Junk") },
-                            onClick = { showMoreMenu = false; onMarkJunk() },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Delete") },
-                            onClick = { showMoreMenu = false; onDelete() },
-                        )
-                    }
+                IconButton(onClick = onReply) {
+                    Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = "Reply")
+                }
+                IconButton(onClick = onReplyAll) {
+                    Icon(Icons.AutoMirrored.Filled.ReplyAll, contentDescription = "Reply All")
+                }
+                IconButton(onClick = onForward) {
+                    Icon(Icons.AutoMirrored.Filled.Forward, contentDescription = "Forward")
+                }
+                IconButton(onClick = onMove) {
+                    Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = "Move")
+                }
+                IconButton(onClick = onMarkJunk) {
+                    Icon(Icons.Filled.Report, contentDescription = "Mark as Junk")
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Filled.Delete, contentDescription = "Delete")
                 }
             }
             folderId == SENT_ID -> {
-                TextButton(onClick = onForward) { Text("Forward") }
-                TextButton(onClick = onMove) { Text("Move") }
-                TextButton(onClick = onDelete) { Text("Delete") }
+                IconButton(onClick = onForward) {
+                    Icon(Icons.AutoMirrored.Filled.Forward, contentDescription = "Forward")
+                }
+                IconButton(onClick = onMove) {
+                    Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = "Move")
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                }
             }
             folderId == DRAFTS_ID -> {
-                TextButton(onClick = onEdit) { Text("Edit") }
-                TextButton(onClick = onDiscard) { Text("Discard") }
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Filled.Edit, contentDescription = "Edit")
+                }
+                IconButton(onClick = onDiscard) {
+                    Icon(Icons.Filled.DeleteForever, contentDescription = "Discard")
+                }
             }
             folderId == SCHEDULED_ID -> {
-                TextButton(onClick = onCancelScheduled) { Text("Cancel scheduled send") }
+                IconButton(onClick = onCancelScheduled) {
+                    Icon(Icons.Filled.Cancel, contentDescription = "Cancel scheduled send")
+                }
             }
             folderId == SNOOZED_ID -> {
-                TextButton(onClick = onReply) { Text("Reply") }
-                TextButton(onClick = onReplyAll) { Text("Reply All") }
-                TextButton(onClick = onForward) { Text("Forward") }
-                TextButton(onClick = onCancelSnooze) { Text("Cancel snooze") }
+                IconButton(onClick = onReply) {
+                    Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = "Reply")
+                }
+                IconButton(onClick = onReplyAll) {
+                    Icon(Icons.AutoMirrored.Filled.ReplyAll, contentDescription = "Reply All")
+                }
+                IconButton(onClick = onForward) {
+                    Icon(Icons.AutoMirrored.Filled.Forward, contentDescription = "Forward")
+                }
+                IconButton(onClick = onCancelSnooze) {
+                    Icon(Icons.Filled.AlarmOff, contentDescription = "Cancel snooze")
+                }
             }
             folderId == JUNK_ID -> {
-                TextButton(onClick = onNotJunk) { Text("Not junk") }
-                TextButton(onClick = onMove) { Text("Move") }
-                TextButton(onClick = onDelete) { Text("Delete") }
+                IconButton(onClick = onNotJunk) {
+                    Icon(Icons.Filled.ThumbUp, contentDescription = "Not Junk")
+                }
+                IconButton(onClick = onMove) {
+                    Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = "Move")
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                }
             }
             folderId == TRASH_ID -> {
-                TextButton(onClick = onMove) { Text("Move") }
-                TextButton(onClick = onDelete) { Text("Delete") }
+                IconButton(onClick = onMove) {
+                    Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = "Move")
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                }
             }
         }
     }
