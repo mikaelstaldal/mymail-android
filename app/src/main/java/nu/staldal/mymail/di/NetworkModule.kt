@@ -73,8 +73,8 @@ object NetworkModule {
 
         if (BuildConfig.DEBUG) {
             val loggingInterceptor = HttpLoggingInterceptor().apply {
-                // Only log URL, method, response code, and response time — never headers.
-                level = HttpLoggingInterceptor.Level.BASIC
+                level = HttpLoggingInterceptor.Level.HEADERS
+                redactHeader("Authorization")
             }
             builder.addInterceptor(loggingInterceptor)
             builder.addInterceptor(ErrorLoggingInterceptor())
