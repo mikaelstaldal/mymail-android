@@ -7,6 +7,7 @@ import nu.staldal.mymail.di.RetrofitHolder
 import nu.staldal.mymail.model.DraftRequest
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.ResponseBody
 import retrofit2.HttpException
 import java.io.IOException
@@ -107,10 +108,8 @@ class DraftRepository @Inject constructor(
             val messagePart = MultipartBody.Part.createFormData(
                 "message",
                 null,
-                okhttp3.RequestBody.create(
-                    "application/json".toMediaType(),
-                    kotlinx.serialization.json.Json.encodeToString(DraftRequest.serializer(), request),
-                ),
+                kotlinx.serialization.json.Json.encodeToString(DraftRequest.serializer(), request)
+                    .toRequestBody("application/json".toMediaType()),
             )
             val response = api.saveNewDraftWithAttachments(messagePart, attachments)
             Result.success(response.id.toLong())
@@ -131,10 +130,8 @@ class DraftRepository @Inject constructor(
             val messagePart = MultipartBody.Part.createFormData(
                 "message",
                 null,
-                okhttp3.RequestBody.create(
-                    "application/json".toMediaType(),
-                    kotlinx.serialization.json.Json.encodeToString(DraftRequest.serializer(), request),
-                ),
+                kotlinx.serialization.json.Json.encodeToString(DraftRequest.serializer(), request)
+                    .toRequestBody("application/json".toMediaType()),
             )
             api.replaceDraftContentWithAttachments(id, messagePart, attachments)
             Result.success(Unit)

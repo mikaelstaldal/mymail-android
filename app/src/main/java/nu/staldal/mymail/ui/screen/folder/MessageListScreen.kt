@@ -28,8 +28,8 @@ import androidx.compose.material.icons.filled.Attachment
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Create
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
@@ -200,7 +200,7 @@ fun MessageListScreen(
                         }
                         IconButton(onClick = { showMovePicker = true }) {
                             Icon(
-                                imageVector = Icons.Filled.DriveFileMove,
+                                imageVector = Icons.AutoMirrored.Filled.DriveFileMove,
                                 contentDescription = "Move to folder",
                             )
                         }

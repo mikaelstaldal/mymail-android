@@ -21,11 +21,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
@@ -38,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -148,7 +149,7 @@ fun ComposeScreen(
                         if (isSending) {
                             CircularProgressIndicator(modifier = Modifier.width(24.dp))
                         } else {
-                            Icon(Icons.Filled.Send, contentDescription = "Send")
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
                         }
                     }
                 },
@@ -415,7 +416,7 @@ private fun FromDropdown(
             label = { Text("From") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
-                .menuAnchor()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                 .fillMaxWidth(),
             enabled = enabled,
         )
@@ -496,7 +497,7 @@ private fun AddressChipField(
             FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .menuAnchor(),
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 for (chip in chips) {

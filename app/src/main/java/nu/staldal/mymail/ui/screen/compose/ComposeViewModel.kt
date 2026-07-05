@@ -33,7 +33,8 @@ import nu.staldal.mymail.repository.IdentityRepository
 import nu.staldal.mymail.repository.MessageRepository
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
-import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.apache.james.mime4j.dom.address.Group
 import org.apache.james.mime4j.dom.address.Mailbox
 import org.apache.james.mime4j.field.address.DefaultAddressParser
@@ -737,10 +738,7 @@ class ComposeViewModel @Inject constructor(
                         cachedFile.outputStream().use { out -> body.byteStream().copyTo(out) }
                         redownloadedFiles.add(cachedFile)
 
-                        val requestBody = RequestBody.create(
-                            meta.contentType.toMediaType(),
-                            cachedFile,
-                        )
+                        val requestBody = cachedFile.asRequestBody(meta.contentType.toMediaType())
                         val part = MultipartBody.Part.createFormData(
                             "attachments",
                             meta.filename,
@@ -764,7 +762,7 @@ class ComposeViewModel @Inject constructor(
                 val filename = resolveFilename(context, uri)
                 val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
                 val bytes = context.contentResolver.openInputStream(uri)?.readBytes() ?: continue
-                val requestBody = RequestBody.create(mimeType.toMediaType(), bytes)
+                val requestBody = bytes.toRequestBody(mimeType.toMediaType())
                 val part = MultipartBody.Part.createFormData("attachments", filename, requestBody)
                 newParts.add(part)
                 newAttachmentInfos.add(
