@@ -20,5 +20,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "mymail"
+rootProject.name = "mymail-android"
 include(":app")
