@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">mymail</string>
+    <string name="app_name">MyMail</string>
     <string name="notification_channel_new_mail_id">mymail_new_mail</string>
     <string name="notification_channel_new_mail_name">New mail</string>
     <string name="notification_channel_new_mail_description">Notifications for new messages in your inbox</string>

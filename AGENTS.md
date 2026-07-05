@@ -18,6 +18,23 @@ gradle :app:openApiGenerate
 gradle :app:openApiGenerate -PopenApiSpecPath=/path/to/openapi.yaml
 ```
 
+## Technology Stack
+
+| Concern              | Technology                               |
+|----------------------|------------------------------------------|
+| Language             | Kotlin                                   |
+| UI                   | Jetpack Compose + Material 3             |
+| Navigation           | Jetpack Navigation Compose               |
+| API client           | Retrofit 2 (generated from OpenAPI spec) |
+| JSON                 | kotlinx.serialization                    |
+| HTTP                 | OkHttp 4                                 |
+| Async                | Kotlin Coroutines + Flow                 |
+| State / lifecycle    | ViewModel + StateFlow                    |
+| Dependency injection | Hilt                                     |
+| Credentials storage  | EncryptedSharedPreferences               |
+| Background polling   | WorkManager                              |
+| RFC 5322 parsing     | Apache MIME4J                            |
+
 ## Architecture Overview
 
 Single-activity app (`MainActivity`) using Jetpack Compose + Navigation Compose. The layer order is:

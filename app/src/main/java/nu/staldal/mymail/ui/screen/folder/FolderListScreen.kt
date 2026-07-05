@@ -60,7 +60,7 @@ fun FolderListScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("mymail") },
+                title = { Text("MyMail") },
                 actions = {
                     IconButton(onClick = { navController.navigate("search") }) {
                         Icon(

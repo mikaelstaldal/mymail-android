@@ -1,11 +1,12 @@
-# mymail Android
+# MyMail Android
 
-Native Android client for [mymail](https://github.com/mikaelstaldal/mymail), a self-hosted email server. Connects over the mymail REST API — no offline support in v1.
+Native Android client for [MyMail](https://github.com/mikaelstaldal/mymail), a self-hosted email server. 
+Connects over the MyMail REST API — no offline support.
 
 ## Requirements
 
 - Android 8.0+ (API 26)
-- A running mymail server
+- A running MyMail server
 
 ## Building
 
@@ -26,27 +27,10 @@ The build automatically generates the Retrofit API client from the OpenAPI spec 
 gradle :app:assembleDebug -PopenApiSpecPath=/path/to/openapi.yaml
 ```
 
-## Technology Stack
-
-| Concern              | Technology                               |
-|----------------------|------------------------------------------|
-| Language             | Kotlin                                   |
-| UI                   | Jetpack Compose + Material 3             |
-| Navigation           | Jetpack Navigation Compose               |
-| API client           | Retrofit 2 (generated from OpenAPI spec) |
-| JSON                 | kotlinx.serialization                    |
-| HTTP                 | OkHttp 4                                 |
-| Async                | Kotlin Coroutines + Flow                 |
-| State / lifecycle    | ViewModel + StateFlow                    |
-| Dependency injection | Hilt                                     |
-| Credentials storage  | EncryptedSharedPreferences               |
-| Background polling   | WorkManager                              |
-| RFC 5322 parsing     | Apache MIME4J                            |
-
 ## Features
 
 - Browse folders and messages with infinite scroll
-- Read messages (plain text) with thread view
+- Read messages (plain text) with a thread view
 - Compose, reply, reply-all, forward
 - Draft auto-save every 30 seconds
 - File attachments (upload and download)
@@ -56,13 +40,13 @@ gradle :app:assembleDebug -PopenApiSpecPath=/path/to/openapi.yaml
 - Contact book with autocomplete
 - Spam filter settings
 - Sending identities
-- New-mail notifications (foreground + background polling)
+- New-mail notifications (foreground and background polling)
 - Dark mode / light mode / system default
 - Message list density preference (compact / normal / relaxed)
 
 ## First Launch
 
-On first launch the app shows a setup screen. Enter your mymail server URL (e.g. `https://mail.example.com`), username, and password. 
+On first launch the app shows a setup screen. Enter your MyMail server URL (e.g. `https://mail.example.com`), username, and password. 
 The app validates the credentials by calling the server before saving them.
 
 ## Security Notes
