@@ -30,13 +30,11 @@ import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.MarkEmailRead
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -171,7 +169,6 @@ fun MessageListScreen(
     val showMarkAllRead = folderId != DRAFTS_ID && folderId != SCHEDULED_ID
     val showEmptyFolder = folderId == TRASH_ID || folderId == JUNK_ID
 
-    var showOverflowMenu by remember { mutableStateOf(false) }
     var showMovePicker by remember { mutableStateOf(false) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var showEmptyFolderDialog by remember { mutableStateOf(false) }
@@ -234,35 +231,20 @@ fun MessageListScreen(
                         }
                     },
                     actions = {
-                        if (showMarkAllRead || showEmptyFolder) {
-                            IconButton(onClick = { showOverflowMenu = true }) {
+                        if (showMarkAllRead) {
+                            IconButton(onClick = { viewModel.markAllRead(folderId) }) {
                                 Icon(
-                                    imageVector = Icons.Filled.MoreVert,
-                                    contentDescription = "More options",
+                                    imageVector = Icons.Filled.MarkEmailRead,
+                                    contentDescription = "Mark all as read",
                                 )
                             }
-                            DropdownMenu(
-                                expanded = showOverflowMenu,
-                                onDismissRequest = { showOverflowMenu = false },
-                            ) {
-                                if (showMarkAllRead) {
-                                    DropdownMenuItem(
-                                        text = { Text("Mark all as read") },
-                                        onClick = {
-                                            showOverflowMenu = false
-                                            viewModel.markAllRead(folderId)
-                                        },
-                                    )
-                                }
-                                if (showEmptyFolder) {
-                                    DropdownMenuItem(
-                                        text = { Text("Empty folder") },
-                                        onClick = {
-                                            showOverflowMenu = false
-                                            showEmptyFolderDialog = true
-                                        },
-                                    )
-                                }
+                        }
+                        if (showEmptyFolder) {
+                            IconButton(onClick = { showEmptyFolderDialog = true }) {
+                                Icon(
+                                    imageVector = Icons.Filled.DeleteSweep,
+                                    contentDescription = "Empty folder",
+                                )
                             }
                         }
                     },
