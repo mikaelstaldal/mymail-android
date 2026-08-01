@@ -204,12 +204,14 @@ class MessageRepository @Inject constructor(
         folderId: Long? = null,
         dateFrom: String? = null,
         dateTo: String? = null,
+        fromAddr: String? = null,
+        toAddr: String? = null,
         limit: Int = 50,
         offset: Int = 0,
     ): Result<SearchResult> {
         val api = retrofitHolder.get().create(MessagesApi::class.java)
         return try {
-            val response = api.searchMessages(q, folderId, dateFrom, dateTo, limit, offset)
+            val response = api.searchMessages(q, folderId, dateFrom, dateTo, fromAddr, toAddr, limit, offset)
             val items = response.items.map { item ->
                 MessageSummaryWithSnippet(
                     summary = MessageSummary(

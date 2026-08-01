@@ -45,7 +45,7 @@ API (generated) → Repository → ViewModel → Screen (Compose)
 
 **Dependency injection:** Hilt throughout. `NetworkModule` provides `RetrofitHolder` and the shared `OkHttpClient`; `PrefsModule` provides `EncryptedSharedPreferences`.
 
-**API client generation:** The `openApiGenerate` Gradle task generates Retrofit interfaces (`FoldersApi`, `MessagesApi`, etc.) and model classes into `app/build/generated/openapi/`. These are wired into compilation via `kotlin.sourceSets["main"].kotlin.srcDir(...)`. Never edit generated files — they live under `build/`.
+**API client generation:** The `openApiGenerate` Gradle task generates the model classes into `app/build/generated/openapi/`. The Retrofit interfaces (`FoldersApi`, `MessagesApi`, etc.) are **not** generated — they are hand-written in `app/src/main/java/nu/staldal/mymail/api/`, so a new endpoint or query parameter has to be added there by hand. These are wired into compilation via `kotlin.sourceSets["main"].kotlin.srcDir(...)`. Never edit generated files — they live under `build/`.
 
 **`RetrofitHolder`:** A `@Singleton` wrapping `AtomicReference<Retrofit>`. Repositories call `holder.get().create(FooApi::class.java)` on **every request** (not at field-init time) because `holder.get()` may return a new `Retrofit` after `rebuild()` is called when the server URL changes.
 

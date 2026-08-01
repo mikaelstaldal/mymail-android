@@ -3,12 +3,14 @@ package nu.staldal.mymail.ui.screen.search
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import nu.staldal.mymail.model.Folder
 import nu.staldal.mymail.repository.FolderRepository
@@ -16,6 +18,15 @@ import nu.staldal.mymail.repository.MessageRepository
 import nu.staldal.mymail.repository.MessageSummaryWithSnippet
 import java.time.LocalDate
 import javax.inject.Inject
+
+/**
+ * Typing in an address filter re-searches only after this quiet period, the same debounce the
+ * contact list uses for its search field.
+ */
+private const val ADDRESS_DEBOUNCE_MS = 300L
+
+/** REQ-ERR-01: a failed request is retried once, after 2 seconds. */
+private const val RETRY_ATTEMPTS = 1
 
 sealed class SearchUiState {
     data object Idle : SearchUiState()
@@ -37,14 +48,9 @@ class SearchViewModel @Inject constructor(
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
 
-    private val _folderId = MutableStateFlow<Long?>(null)
-    val folderId: StateFlow<Long?> = _folderId.asStateFlow()
-
-    private val _dateFrom = MutableStateFlow<LocalDate?>(null)
-    val dateFrom: StateFlow<LocalDate?> = _dateFrom.asStateFlow()
-
-    private val _dateTo = MutableStateFlow<LocalDate?>(null)
-    val dateTo: StateFlow<LocalDate?> = _dateTo.asStateFlow()
+    /** The refinements as the form currently holds them. */
+    private val _refinements = MutableStateFlow(SearchRefinements())
+    val refinements: StateFlow<SearchRefinements> = _refinements.asStateFlow()
 
     private val _folders = MutableStateFlow<List<Folder>>(emptyList())
     val folders: StateFlow<List<Folder>> = _folders.asStateFlow()
@@ -57,6 +63,20 @@ class SearchViewModel @Inject constructor(
 
     private var currentOffset = 0
     private var canLoadMore = true
+
+    // The query and refinements the current result set was fetched with. Pagination and the
+    // automatic retry re-run these, so an address filter still being typed — it only re-searches
+    // after the debounce — cannot change what the next page fetches.
+    private var activeQuery = ""
+    private var activeRefinements = SearchRefinements()
+
+    private var addressDebounceJob: Job? = null
+
+    // A failed fetch is retried once (REQ-ERR-01). The budgets are renewed whenever a new search
+    // is submitted — and, for pagination, after a page that did load — so a later failure gets
+    // its own retry instead of inheriting an exhausted one.
+    private var searchRetriesLeft = RETRY_ATTEMPTS
+    private var nextPageRetriesLeft = RETRY_ATTEMPTS
 
     init {
         loadFolders()
@@ -76,18 +96,38 @@ class SearchViewModel @Inject constructor(
     }
 
     fun setFolderId(id: Long?) {
-        _folderId.value = id
+        _refinements.update { it.copy(folderId = id) }
         resetAndSearch()
     }
 
     fun setDateFrom(date: LocalDate?) {
-        _dateFrom.value = date
+        _refinements.update { it.copy(dateFrom = date) }
         resetAndSearch()
     }
 
     fun setDateTo(date: LocalDate?) {
-        _dateTo.value = date
+        _refinements.update { it.copy(dateTo = date) }
         resetAndSearch()
+    }
+
+    fun setFromAddr(addr: String) {
+        _refinements.update { it.copy(fromAddr = addr) }
+        scheduleAddressSearch()
+    }
+
+    fun setToAddr(addr: String) {
+        _refinements.update { it.copy(toAddr = addr) }
+        scheduleAddressSearch()
+    }
+
+    private fun scheduleAddressSearch() {
+        addressDebounceJob?.cancel()
+        addressDebounceJob = viewModelScope.launch {
+            delay(ADDRESS_DEBOUNCE_MS)
+            // Cleared before searching, so search() below never cancels the coroutine it runs on.
+            addressDebounceJob = null
+            resetAndSearch()
+        }
     }
 
     private fun resetAndSearch() {
@@ -97,8 +137,15 @@ class SearchViewModel @Inject constructor(
     }
 
     fun search() {
-        val q = _query.value
-        if (q.isBlank()) {
+        // An explicit search supersedes a pending address-filter debounce.
+        addressDebounceJob?.cancel()
+        addressDebounceJob = null
+        activeQuery = _query.value
+        activeRefinements = _refinements.value
+        searchRetriesLeft = RETRY_ATTEMPTS
+        nextPageRetriesLeft = RETRY_ATTEMPTS
+        if (activeQuery.isBlank()) {
+            canLoadMore = false
             _uiState.value = SearchUiState.Idle
             return
         }
@@ -110,8 +157,7 @@ class SearchViewModel @Inject constructor(
 
     fun loadNextPage() {
         if (!canLoadMore || _isLoadingNextPage.value) return
-        val q = _query.value
-        if (q.isBlank()) return
+        if (activeQuery.isBlank()) return
         _isLoadingNextPage.value = true
         viewModelScope.launch {
             performSearch(offset = currentOffset, replaceResults = false)
@@ -120,16 +166,15 @@ class SearchViewModel @Inject constructor(
     }
 
     private suspend fun performSearch(offset: Int, replaceResults: Boolean) {
-        val q = _query.value
-        val folderId = _folderId.value
-        val dateFromStr = _dateFrom.value?.let { toRfc3339StartOfDay(it) }
-        val dateToStr = _dateTo.value?.let { toRfc3339StartOfNextDay(it) }
+        val params = activeRefinements.toQueryParams()
 
         val result = messageRepository.searchMessages(
-            q = q,
-            folderId = folderId,
-            dateFrom = dateFromStr,
-            dateTo = dateToStr,
+            q = activeQuery,
+            folderId = params.folderId,
+            dateFrom = params.dateFrom,
+            dateTo = params.dateTo,
+            fromAddr = params.fromAddr,
+            toAddr = params.toAddr,
             limit = 50,
             offset = offset,
         )
@@ -147,6 +192,7 @@ class SearchViewModel @Inject constructor(
                         SearchUiState.Success(newItems)
                     }
                 } else {
+                    nextPageRetriesLeft = RETRY_ATTEMPTS
                     if (newItems.isNotEmpty()) {
                         currentOffset += newItems.size
                         val currentState = _uiState.value
@@ -163,20 +209,32 @@ class SearchViewModel @Inject constructor(
                 if (replaceResults) {
                     _uiState.value = SearchUiState.Error(message)
                     _snackbarMessage.emit(message)
-                    scheduleRetrySearch()
+                    // REQ-ERR-01: retry once. A failing retry leaves the error on screen for the
+                    // user to act on rather than scheduling another.
+                    if (searchRetriesLeft > 0) {
+                        searchRetriesLeft--
+                        scheduleRetrySearch()
+                    }
                 } else {
                     _snackbarMessage.emit(message)
-                    scheduleRetryNextPage()
+                    if (nextPageRetriesLeft > 0) {
+                        nextPageRetriesLeft--
+                        scheduleRetryNextPage()
+                    }
                 }
             },
         )
     }
 
     private fun scheduleRetrySearch() {
-        val queryCopy = _query.value
+        val queryCopy = activeQuery
+        val refinementsCopy = activeRefinements
         viewModelScope.launch {
             delay(2000)
-            if (_query.value == queryCopy && _uiState.value is SearchUiState.Error) {
+            if (activeQuery == queryCopy &&
+                activeRefinements == refinementsCopy &&
+                _uiState.value is SearchUiState.Error
+            ) {
                 performSearch(offset = 0, replaceResults = true)
             }
         }
@@ -202,15 +260,4 @@ class SearchViewModel @Inject constructor(
             }
         }
     }
-}
-
-private fun toRfc3339StartOfDay(date: LocalDate): String {
-    val zdt = java.time.ZonedDateTime.of(date, java.time.LocalTime.MIDNIGHT, java.time.ZoneId.systemDefault())
-    return zdt.format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-}
-
-private fun toRfc3339StartOfNextDay(date: LocalDate): String {
-    val nextDay = date.plusDays(1)
-    val zdt = java.time.ZonedDateTime.of(nextDay, java.time.LocalTime.MIDNIGHT, java.time.ZoneId.systemDefault())
-    return zdt.format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME)
 }

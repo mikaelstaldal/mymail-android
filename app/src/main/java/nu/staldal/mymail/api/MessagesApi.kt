@@ -59,6 +59,8 @@ interface MessagesApi {
         @Query("folder_id") folderId: Long? = null,
         @Query("date_from") dateFrom: String? = null,
         @Query("date_to") dateTo: String? = null,
+        @Query("from_addr") fromAddr: String? = null,
+        @Query("to_addr") toAddr: String? = null,
         @Query("limit") limit: Int? = 50,
         @Query("offset") offset: Int? = 0,
     ): MessagesSearchGet200Response

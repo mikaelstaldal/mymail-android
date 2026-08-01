@@ -20,6 +20,9 @@ import nu.staldal.mymail.repository.MessageRepository
 import javax.inject.Inject
 import javax.inject.Named
 
+/** REQ-ERR-01: a failed request is retried once, after 2 seconds. */
+private const val RETRY_ATTEMPTS = 1
+
 sealed class MessageListUiState {
     data object Loading : MessageListUiState()
     data class Success(val messages: List<MessageSummary>) : MessageListUiState()
@@ -60,6 +63,12 @@ class MessageListViewModel @Inject constructor(
     private var currentOffset = 0
     private var canLoadMore = true
 
+    // A failed fetch is retried once (REQ-ERR-01). The budgets are renewed whenever a fresh load
+    // is started — and, for pagination, after a page that did load — so a later failure gets its
+    // own retry instead of inheriting an exhausted one.
+    private var loadRetriesLeft = RETRY_ATTEMPTS
+    private var nextPageRetriesLeft = RETRY_ATTEMPTS
+
     val messageDensity: MessageDensity
         get() {
             val value = prefs.getString("message_list_density", "Normal") ?: "Normal"
@@ -68,8 +77,7 @@ class MessageListViewModel @Inject constructor(
 
     fun loadMessages(folderId: Long) {
         _currentFolderId.value = folderId
-        currentOffset = 0
-        canLoadMore = true
+        startFreshLoad()
         viewModelScope.launch {
             _uiState.value = MessageListUiState.Loading
             loadFolderNameAndMessages(folderId, offset = 0)
@@ -78,12 +86,19 @@ class MessageListViewModel @Inject constructor(
 
     fun refresh() {
         val folderId = _currentFolderId.value
-        currentOffset = 0
-        canLoadMore = true
+        startFreshLoad()
         viewModelScope.launch {
             _uiState.value = MessageListUiState.Loading
             loadFolderNameAndMessages(folderId, offset = 0)
         }
+    }
+
+    /** Starts over from the first page, with the retry budgets renewed. */
+    private fun startFreshLoad() {
+        currentOffset = 0
+        canLoadMore = true
+        loadRetriesLeft = RETRY_ATTEMPTS
+        nextPageRetriesLeft = RETRY_ATTEMPTS
     }
 
     fun loadNextPage() {
@@ -94,6 +109,7 @@ class MessageListViewModel @Inject constructor(
             val result = messageRepository.listMessages(folderId, limit = 50, offset = currentOffset)
             result.fold(
                 onSuccess = { newMessages ->
+                    nextPageRetriesLeft = RETRY_ATTEMPTS
                     if (newMessages.size < 50) {
                         canLoadMore = false
                     }
@@ -110,7 +126,10 @@ class MessageListViewModel @Inject constructor(
                 onFailure = { error ->
                     val message = error.message ?: "Failed to load more messages"
                     _snackbarMessage.emit(message)
-                    scheduleRetryNextPage(folderId)
+                    if (nextPageRetriesLeft > 0) {
+                        nextPageRetriesLeft--
+                        scheduleRetryNextPage(folderId)
+                    }
                 },
             )
             _isLoadingNextPage.value = false
@@ -250,8 +269,7 @@ class MessageListViewModel @Inject constructor(
             val result = folderRepository.deleteAllMessages(folderId)
             result.fold(
                 onSuccess = {
-                    currentOffset = 0
-                    canLoadMore = true
+                    startFreshLoad()
                     loadFolderNameAndMessages(folderId, offset = 0)
                 },
                 onFailure = { error ->
@@ -310,7 +328,12 @@ class MessageListViewModel @Inject constructor(
                 _uiState.value = MessageListUiState.Error(message, is404 = is404)
                 if (!is404) {
                     _snackbarMessage.emit(message)
-                    scheduleRetryLoad(folderId)
+                    // REQ-ERR-01: retry once. A failing retry leaves the error on screen for the
+                    // user to act on rather than scheduling another.
+                    if (loadRetriesLeft > 0) {
+                        loadRetriesLeft--
+                        scheduleRetryLoad(folderId)
+                    }
                 }
             },
         )

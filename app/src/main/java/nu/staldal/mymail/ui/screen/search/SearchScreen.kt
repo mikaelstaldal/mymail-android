@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
@@ -30,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -54,6 +57,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -77,9 +82,7 @@ fun SearchScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val query by viewModel.query.collectAsState()
-    val folderId by viewModel.folderId.collectAsState()
-    val dateFrom by viewModel.dateFrom.collectAsState()
-    val dateTo by viewModel.dateTo.collectAsState()
+    val refinements by viewModel.refinements.collectAsState()
     val folders by viewModel.folders.collectAsState()
     val isLoadingNextPage by viewModel.isLoadingNextPage.collectAsState()
 
@@ -183,6 +186,32 @@ fun SearchScreen(
                 ),
             )
 
+            // Address filter row: From / To. Both match as a case-insensitive substring, To
+            // against either the To or the Cc header.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                AddressFilterField(
+                    value = refinements.fromAddr,
+                    onValueChange = viewModel::setFromAddr,
+                    label = "From",
+                    clearContentDescription = "Clear from address",
+                    onSearch = viewModel::search,
+                    modifier = Modifier.weight(1f),
+                )
+                AddressFilterField(
+                    value = refinements.toAddr,
+                    onValueChange = viewModel::setToAddr,
+                    label = "To / Cc",
+                    clearContentDescription = "Clear to address",
+                    onSearch = viewModel::search,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
             // Filter row: folder + date range
             Row(
                 modifier = Modifier
@@ -194,10 +223,10 @@ fun SearchScreen(
                 // Folder filter
                 Box {
                     OutlinedButton(onClick = { showFolderDropdown = true }) {
-                        val selectedFolderName = if (folderId == null) {
+                        val selectedFolderName = if (refinements.folderId == null) {
                             "All mail"
                         } else {
-                            folders.firstOrNull { it.id.toLong() == folderId }?.name ?: "All mail"
+                            folders.firstOrNull { it.id.toLong() == refinements.folderId }?.name ?: "All mail"
                         }
                         Text(selectedFolderName, maxLines = 1)
                     }
@@ -236,11 +265,11 @@ fun SearchScreen(
                 // Date from picker
                 OutlinedButton(onClick = { showDateFromPicker = true }) {
                     Text(
-                        text = dateFrom?.format(dateDisplayFormatter) ?: "From date",
+                        text = refinements.dateFrom?.format(dateDisplayFormatter) ?: "From date",
                         maxLines = 1,
                     )
                 }
-                if (dateFrom != null) {
+                if (refinements.dateFrom != null) {
                     IconButton(
                         onClick = { viewModel.setDateFrom(null) },
                         modifier = Modifier.size(24.dp),
@@ -256,11 +285,11 @@ fun SearchScreen(
                 // Date to picker
                 OutlinedButton(onClick = { showDateToPicker = true }) {
                     Text(
-                        text = dateTo?.format(dateDisplayFormatter) ?: "To date",
+                        text = refinements.dateTo?.format(dateDisplayFormatter) ?: "To date",
                         maxLines = 1,
                     )
                 }
-                if (dateTo != null) {
+                if (refinements.dateTo != null) {
                     IconButton(
                         onClick = { viewModel.setDateTo(null) },
                         modifier = Modifier.size(24.dp),
@@ -370,7 +399,7 @@ fun SearchScreen(
 
     // Date from picker dialog
     if (showDateFromPicker) {
-        val initialMillis = dateFrom
+        val initialMillis = refinements.dateFrom
             ?.atStartOfDay(ZoneId.systemDefault())
             ?.toInstant()
             ?.toEpochMilli()
@@ -403,7 +432,7 @@ fun SearchScreen(
 
     // Date to picker dialog
     if (showDateToPicker) {
-        val initialMillis = dateTo
+        val initialMillis = refinements.dateTo
             ?.atStartOfDay(ZoneId.systemDefault())
             ?.toInstant()
             ?.toEpochMilli()
@@ -433,6 +462,49 @@ fun SearchScreen(
             DatePicker(state = datePickerState)
         }
     }
+}
+
+/**
+ * One of the two address filters. Typing does not issue a request directly — the ViewModel
+ * debounces — but the keyboard's search action commits immediately.
+ */
+@Composable
+private fun AddressFilterField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    clearContentDescription: String,
+    onSearch: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { newVal ->
+            if (newVal.length <= ADDRESS_FILTER_MAX_LENGTH) {
+                onValueChange(newVal)
+            }
+        },
+        modifier = modifier,
+        label = { Text(label) },
+        trailingIcon = {
+            if (value.isNotEmpty()) {
+                IconButton(onClick = { onValueChange("") }) {
+                    Icon(
+                        imageVector = Icons.Filled.Clear,
+                        contentDescription = clearContentDescription,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        },
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyMedium,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Email,
+            imeAction = ImeAction.Search,
+        ),
+        keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+    )
 }
 
 @Composable

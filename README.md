@@ -34,7 +34,7 @@ gradle :app:assembleDebug -PopenApiSpecPath=/path/to/openapi.yaml
 - Compose, reply, reply-all, forward
 - Draft auto-save every 30 seconds
 - File attachments (upload and download)
-- Search across all mail
+- Search across all mail, refinable by folder, date range, and From / To address
 - Multi-select: bulk mark read/unread, move, delete
 - Folder management (create, rename, delete)
 - Contact book with autocomplete

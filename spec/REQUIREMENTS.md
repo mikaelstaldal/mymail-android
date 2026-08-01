@@ -340,7 +340,7 @@ To: <source To>
 
 **REQ-SEARCH-05** Optional date range: From date and To date via date picker dialogs. `date_from` maps to the start of the selected calendar day in the device's local timezone; `date_to` maps to the start of the following calendar day (exclusive upper bound).
 
-**REQ-SEARCH-06** Whenever the query text or any date filter changes, reset offset to 0 and discard previously loaded results before issuing a new request.
+**REQ-SEARCH-06** Whenever the query text or any filter changes, reset offset to 0 and discard previously loaded results before issuing a new request. Folder and date changes take effect immediately; address filter (REQ-SEARCH-15) edits are debounced 300 ms, as on the contact list search field.
 
 **REQ-SEARCH-07** Results are rendered as a list of message summaries. Each result shows the FTS `snippet` below the subject. Matched keywords surrounded by `**` markers in the snippet are rendered in bold; the `**` delimiters are stripped from the displayed text.
 
@@ -357,6 +357,10 @@ To: <source To>
 **REQ-SEARCH-13** Empty state: when 0 results are returned for a submitted query, show centred "No results" text.
 
 **REQ-SEARCH-14** Error state on initial load: show a centred error message with a Retry button.
+
+**REQ-SEARCH-15** Optional address filters: two text fields, From and To / Cc. Non-blank values are trimmed and passed as `from_addr` and `to_addr`; blank values are omitted from the request entirely rather than sent empty. `from_addr` matches the `From` header, `to_addr` matches the `To` **or** the `Cc` header, both as a case-insensitive substring — the same rule as a filter's `match_from`/`match_to`, with `%` and `_` treated as literals rather than wildcards. Both fields have a hard cap of 200 characters, matching the server's `maxLength`. The keyboard's search action commits the field immediately instead of waiting for the debounce. All refinements are ANDed with each other and with the full-text query.
+
+**REQ-SEARCH-16** Pagination and the automatic retry re-run the query and refinements the current result set was fetched with, not the current contents of the form. An address filter that has been typed but not yet searched for must not change what the next page fetches.
 
 ---
 
