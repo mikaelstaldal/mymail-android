@@ -226,6 +226,9 @@ class MessageRepository @Inject constructor(
                         flagged = item.flagged,
                         hasAttachments = item.hasAttachments,
                         sendFailed = item.sendFailed,
+                        // Non-null only inside the Scheduled and Snoozed folders, respectively.
+                        sendAt = item.sendAt,
+                        snoozedUntil = item.snoozedUntil,
                         createdAt = item.createdAt,
                     ),
                     snippet = item.snippet,

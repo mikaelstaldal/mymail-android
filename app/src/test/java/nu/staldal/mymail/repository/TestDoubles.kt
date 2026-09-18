@@ -28,6 +28,9 @@ fun messageSummaries(count: Int): List<MessageSummary> = (1..count).map { i ->
         flagged = false,
         hasAttachments = false,
         sendFailed = false,
+        // These belong to the Scheduled and Snoozed folders; an inbox message carries neither.
+        sendAt = null,
+        snoozedUntil = null,
         createdAt = timestamp,
     )
 }
