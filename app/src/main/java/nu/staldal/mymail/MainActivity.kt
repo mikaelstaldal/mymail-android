@@ -1,12 +1,14 @@
 package nu.staldal.mymail
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -19,10 +21,13 @@ import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import nu.staldal.mymail.auth.AuthEventBus
 import nu.staldal.mymail.auth.CredentialStore
+import nu.staldal.mymail.auth.PwClient
+import nu.staldal.mymail.auth.PwCredentialSession
 import nu.staldal.mymail.intent.PendingComposeIntentHolder
 import nu.staldal.mymail.intent.parseComposeIntent
 import nu.staldal.mymail.repository.FolderRepository
@@ -49,6 +54,9 @@ class MainActivity : ComponentActivity() {
     lateinit var pendingComposeIntentHolder: PendingComposeIntentHolder
 
     @Inject
+    lateinit var pwCredentialSession: PwCredentialSession
+
+    @Inject
     @Named("plain")
     lateinit var prefs: SharedPreferences
 
@@ -58,6 +66,22 @@ class MainActivity : ComponentActivity() {
         private set
 
     private var pollingJob: Job? = null
+
+    // Set while the pw activity launched from onCreate is running, so that only that fetch — and
+    // not one the user starts on the setup screen — moves on to the folder list.
+    private var awaitingStartupPwFetch = false
+    private val startupPwFetchFinished = MutableStateFlow(false)
+
+    private val pwLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        PwClient.credentialFromResult(result.resultCode, result.data)
+            ?.let(pwCredentialSession::set)
+        if (awaitingStartupPwFetch) {
+            awaitingStartupPwFetch = false
+            startupPwFetchFinished.value = true
+        }
+    }
 
     fun resetForegroundPollerBaseline() {
         foregroundPollerBaseline = -1
@@ -75,9 +99,13 @@ class MainActivity : ComponentActivity() {
         val hasCredentials = credentialStore.hasCredentials()
         val startDestination = if (hasCredentials) "folders" else "setup"
 
+        // In pw mode every cold start needs a trip through pw before anything is authenticated, so
+        // an incoming send intent is kept and acted on once that fetch succeeds.
+        val pwFetchPending = !hasCredentials && credentialStore.needsPwFetch()
+
         // Only act on incoming "send mail" intents (e.g. share-to, mailto: links) once logged in;
         // otherwise the prefill data would be lost on the way to the setup screen.
-        val composeIntentData = if (hasCredentials) parseComposeIntent(intent) else null
+        val composeIntentData = if (hasCredentials || pwFetchPending) parseComposeIntent(intent) else null
         composeIntentData?.let { pendingComposeIntentHolder.set(it) }
 
         setContent {
@@ -85,8 +113,31 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
 
                 LaunchedEffect(composeIntentData) {
-                    if (composeIntentData != null) {
+                    if (composeIntentData != null && hasCredentials) {
                         navController.navigate("compose")
+                    }
+                }
+
+                // The pw fetch started below finished: continue into the app when it produced a
+                // credential, otherwise leave the user on the setup screen.
+                LaunchedEffect(Unit) {
+                    startupPwFetchFinished.collect { finished ->
+                        if (!finished) return@collect
+                        startupPwFetchFinished.value = false
+                        if (!credentialStore.hasCredentials()) {
+                            // The share was not delivered; drop it rather than have it turn up in
+                            // some later, unrelated new message.
+                            pendingComposeIntentHolder.consume()
+                            return@collect
+                        }
+                        MailPollingWorker.enqueuePolling(this@MainActivity)
+                        startForegroundPollingIfNeeded()
+                        navController.navigate("folders") {
+                            popUpTo(0) { inclusive = true }
+                        }
+                        if (composeIntentData != null) {
+                            navController.navigate("compose")
+                        }
                     }
                 }
 
@@ -114,6 +165,36 @@ class MainActivity : ComponentActivity() {
         if (hasCredentials) {
             MailPollingWorker.enqueuePolling(this)
             startForegroundPolling()
+        } else if (savedInstanceState == null) {
+            fetchPwCredentialIfConfigured()
+        } else {
+            // Recreated while pw was in front: keep waiting for that result instead of asking again.
+            awaitingStartupPwFetch = savedInstanceState.getBoolean(STATE_AWAITING_PW_FETCH, false)
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // Only this flag — never the credential itself — is allowed into saved instance state.
+        outState.putBoolean(STATE_AWAITING_PW_FETCH, awaitingStartupPwFetch)
+    }
+
+    /**
+     * pw credentials are process-memory-only, so a configured app starts each process without one.
+     * Ask pw for it right away instead of making the user visit the setup screen every time.
+     */
+    private fun fetchPwCredentialIfConfigured() {
+        val entryName = credentialStore.pwEntryName ?: return
+        if (!credentialStore.needsPwFetch() || !PwClient.isAvailable(this)) return
+        awaitingStartupPwFetch = true
+        try {
+            pwLauncher.launch(PwClient.createFetchIntent(entryName))
+        } catch (_: ActivityNotFoundException) {
+            // pw may have been uninstalled since it was resolved.
+            awaitingStartupPwFetch = false
+        } catch (_: SecurityException) {
+            // The setup screen explains that both apps must share a signing key.
+            awaitingStartupPwFetch = false
         }
     }
 
@@ -178,5 +259,6 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val TAG = "MainActivity"
         private const val FOREGROUND_POLL_INTERVAL_MS = 30_000L
+        private const val STATE_AWAITING_PW_FETCH = "awaiting_pw_fetch"
     }
 }

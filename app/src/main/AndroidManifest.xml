@@ -5,6 +5,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- pw exposes credentials only to applications signed with the same key. -->
+    <uses-permission android:name="nu.staldal.pw.permission.FETCH_PASSWORD" />
+
+    <!-- Package visibility (Android 11+): without this pw is invisible to us. -->
+    <queries>
+        <package android:name="nu.staldal.pw" />
+    </queries>
+
     <application
         android:name=".MyMailApplication"
         android:allowBackup="false"

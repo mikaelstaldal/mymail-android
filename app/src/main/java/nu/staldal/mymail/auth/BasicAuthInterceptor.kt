@@ -13,13 +13,13 @@ class BasicAuthInterceptor @Inject constructor(
 ) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
-        val username = credentialStore.username
-        val password = credentialStore.password
+        // Either the stored credential or, in pw mode, the one fetched from pw in this process.
+        val credential = credentialStore.activeCredential
 
         val requestBuilder = chain.request().newBuilder()
 
-        if (username != null && password != null) {
-            val credentials = "$username:$password"
+        if (credential != null) {
+            val credentials = "${credential.username}:${credential.password}"
             val encoded = Base64.encodeToString(credentials.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
             // The Authorization header value is intentionally not logged anywhere.
             requestBuilder.header("Authorization", "Basic $encoded")

@@ -7,6 +7,7 @@ import javax.inject.Singleton
 @Singleton
 class CredentialStore @Inject constructor(
     private val prefs: EncryptedSharedPreferences,
+    private val pwCredentialSession: PwCredentialSession,
 ) {
     var serverUrl: String?
         get() = prefs.getString(KEY_SERVER_URL, null)
@@ -20,12 +21,50 @@ class CredentialStore @Inject constructor(
         get() = prefs.getString(KEY_PASSWORD, null)
         private set(value) = prefs.edit().putString(KEY_PASSWORD, value).apply()
 
-    fun save(serverUrl: String, username: String, password: String) {
-        prefs.edit()
-            .putString(KEY_SERVER_URL, serverUrl)
-            .putString(KEY_USERNAME, username)
-            .putString(KEY_PASSWORD, password)
-            .apply()
+    /** Whether the username and password come from pw instead of being stored here. */
+    val usePw: Boolean
+        get() = prefs.getBoolean(KEY_USE_PW, false)
+
+    /** Exact, case-sensitive pw entry name. Only the name is persisted, never the secret. */
+    val pwEntryName: String?
+        get() = prefs.getString(KEY_PW_ENTRY_NAME, null)
+
+    private val config: AuthConfig
+        get() = AuthConfig(
+            serverUrl = serverUrl,
+            storedUsername = username,
+            storedPassword = password,
+            usePw = usePw,
+            pwEntryName = pwEntryName,
+        )
+
+    /**
+     * The credential to authenticate with right now, or `null` when none is available — which in
+     * pw mode is the normal state until the user has completed the pw activity in this process.
+     */
+    val activeCredential: Credential?
+        get() = config.activeCredential(pwCredentialSession.current)
+
+    fun save(
+        serverUrl: String,
+        username: String,
+        password: String,
+        usePw: Boolean = false,
+        pwEntryName: String = "",
+    ) {
+        prefs.edit().apply {
+            putString(KEY_SERVER_URL, serverUrl)
+            putBoolean(KEY_USE_PW, usePw)
+            if (usePw) {
+                putString(KEY_PW_ENTRY_NAME, pwEntryName)
+                remove(KEY_USERNAME)
+                remove(KEY_PASSWORD)
+            } else {
+                remove(KEY_PW_ENTRY_NAME)
+                putString(KEY_USERNAME, username)
+                putString(KEY_PASSWORD, password)
+            }
+        }.apply()
     }
 
     fun clear() {
@@ -33,15 +72,25 @@ class CredentialStore @Inject constructor(
             .remove(KEY_SERVER_URL)
             .remove(KEY_USERNAME)
             .remove(KEY_PASSWORD)
+            .remove(KEY_USE_PW)
+            .remove(KEY_PW_ENTRY_NAME)
             .apply()
+        pwCredentialSession.clear()
     }
 
-    fun hasCredentials(): Boolean =
-        serverUrl != null && username != null && password != null
+    fun hasCredentials(): Boolean = config.isConfigured(pwCredentialSession.current)
+
+    /**
+     * True when the app is configured for pw but this process has no credential yet, so the pw
+     * activity has to be launched before anything can be fetched from the server.
+     */
+    fun needsPwFetch(): Boolean = config.needsPwFetch(pwCredentialSession.current)
 
     private companion object {
         const val KEY_SERVER_URL = "server_url"
         const val KEY_USERNAME = "username"
         const val KEY_PASSWORD = "password"
+        const val KEY_USE_PW = "use_pw"
+        const val KEY_PW_ENTRY_NAME = "pw_entry_name"
     }
 }

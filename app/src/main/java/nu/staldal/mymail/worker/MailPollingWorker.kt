@@ -28,6 +28,7 @@ import nu.staldal.mymail.INBOX_ID
 import nu.staldal.mymail.MainActivity
 import nu.staldal.mymail.MyMailApplication
 import nu.staldal.mymail.R
+import nu.staldal.mymail.auth.CredentialStore
 import nu.staldal.mymail.repository.FolderRepository
 import retrofit2.HttpException
 import java.util.concurrent.TimeUnit
@@ -38,6 +39,7 @@ class MailPollingWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted workerParams: WorkerParameters,
     private val folderRepository: FolderRepository,
+    private val credentialStore: CredentialStore,
     @Named("plain") private val prefs: SharedPreferences,
     private val app: Application,
 ) : CoroutineWorker(context, workerParams) {
@@ -46,6 +48,13 @@ class MailPollingWorker @AssistedInject constructor(
 
     override suspend fun doWork(): ListenableWorker.Result {
         if (application.isAppInForeground.get()) {
+            return ListenableWorker.Result.success()
+        }
+
+        // In pw mode the credential lives in process memory only, so after a process restart there
+        // is nothing to authenticate with. Skip the poll instead of provoking a 401 that would
+        // cancel polling and tell the user the session expired.
+        if (!credentialStore.hasCredentials()) {
             return ListenableWorker.Result.success()
         }
 

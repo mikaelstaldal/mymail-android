@@ -1,16 +1,21 @@
 package nu.staldal.mymail.ui.screen.setup
 
+import android.content.Context
 import android.content.SharedPreferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import nu.staldal.mymail.BuildConfig
+import nu.staldal.mymail.auth.Credential
 import nu.staldal.mymail.auth.CredentialStore
+import nu.staldal.mymail.auth.PwClient
+import nu.staldal.mymail.auth.PwCredentialSession
 import nu.staldal.mymail.di.RetrofitHolder
 import nu.staldal.mymail.repository.FolderRepository
 import okhttp3.OkHttpClient
@@ -26,10 +31,18 @@ data class SetupUiState(
     val username: String = "",
     val password: String = "",
     val passwordTouched: Boolean = false,
+    val usePw: Boolean = false,
+    val pwEntryName: String = "",
+    val pwAvailable: Boolean = false,
+    val pwCredentialLoaded: Boolean = false,
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val navigateToFolders: Boolean = false,
-)
+) {
+    /** In pw mode there is nothing to connect with until pw has handed over a credential. */
+    val canConnect: Boolean
+        get() = !isLoading && (!usePw || (pwEntryName.isNotBlank() && pwCredentialLoaded))
+}
 
 @HiltViewModel
 class SetupViewModel @Inject constructor(
@@ -37,6 +50,8 @@ class SetupViewModel @Inject constructor(
     val retrofitHolder: RetrofitHolder,
     val folderRepository: FolderRepository,
     private val okHttpClient: OkHttpClient,
+    private val pwCredentialSession: PwCredentialSession,
+    @ApplicationContext private val context: Context,
     @Named("plain") val prefs: SharedPreferences,
 ) : ViewModel() {
 
@@ -44,9 +59,33 @@ class SetupViewModel @Inject constructor(
         SetupUiState(
             serverUrl = credentialStore.serverUrl ?: "",
             username = credentialStore.username ?: "",
+            usePw = credentialStore.usePw,
+            pwEntryName = credentialStore.pwEntryName ?: "",
+            pwAvailable = PwClient.isAvailable(context),
+            pwCredentialLoaded = pwCredentialSession.current != null,
         )
     )
     val uiState: StateFlow<SetupUiState> = _uiState.asStateFlow()
+
+    // The entry name the in-memory credential was fetched for, so that editing the name shows the
+    // credential as no longer loaded without discarding one the rest of the app is still using.
+    private var pwFetchedFor: String? =
+        credentialStore.pwEntryName?.takeIf { pwCredentialSession.current != null }
+
+    init {
+        viewModelScope.launch {
+            pwCredentialSession.credential.collect { refreshPwCredentialLoaded() }
+        }
+    }
+
+    private fun refreshPwCredentialLoaded() {
+        _uiState.update {
+            it.copy(
+                pwCredentialLoaded = pwCredentialSession.current != null &&
+                    pwFetchedFor?.trim() == it.pwEntryName.trim(),
+            )
+        }
+    }
 
     fun onServerUrlChange(value: String) {
         _uiState.update { it.copy(serverUrl = value, errorMessage = null) }
@@ -60,6 +99,33 @@ class SetupViewModel @Inject constructor(
         _uiState.update { it.copy(password = value, passwordTouched = true, errorMessage = null) }
     }
 
+    fun onUsePwChange(value: Boolean) {
+        _uiState.update { it.copy(usePw = value, errorMessage = null) }
+    }
+
+    fun onPwEntryNameChange(value: String) {
+        _uiState.update { it.copy(pwEntryName = value, errorMessage = null) }
+        refreshPwCredentialLoaded()
+    }
+
+    /** Result of the pw activity launched from the setup screen. */
+    fun onPwCredential(credential: Credential?) {
+        if (credential == null) {
+            _uiState.update { it.copy(errorMessage = "pw returned no credential") }
+            return
+        }
+        pwFetchedFor = _uiState.value.pwEntryName
+        pwCredentialSession.set(credential)
+        _uiState.update { it.copy(errorMessage = null) }
+        refreshPwCredentialLoaded()
+    }
+
+    fun onPwLaunchFailed() {
+        _uiState.update {
+            it.copy(errorMessage = "Could not open pw — check that both apps use the same signing key")
+        }
+    }
+
     fun connect() {
         viewModelScope.launch {
             val state = _uiState.value
@@ -70,7 +136,20 @@ class SetupViewModel @Inject constructor(
                 return@launch
             }
 
-            if (state.passwordTouched && state.password.isEmpty()) {
+            if (state.usePw) {
+                if (state.pwEntryName.isBlank()) {
+                    _uiState.update { it.copy(errorMessage = "pw entry name is required") }
+                    return@launch
+                }
+                if (!state.pwCredentialLoaded) {
+                    _uiState.update { it.copy(errorMessage = "Fetch the credential from pw first") }
+                    return@launch
+                }
+            } else if (state.password.isEmpty() &&
+                // An untouched, empty field keeps the stored password — unless there is none,
+                // which is the case when switching away from pw mode.
+                (state.passwordTouched || credentialStore.password == null)
+            ) {
                 _uiState.update { it.copy(errorMessage = "Password is required") }
                 return@launch
             }
@@ -87,7 +166,11 @@ class SetupViewModel @Inject constructor(
                 serverUrl = state.serverUrl,
                 username = state.username,
                 password = effectivePassword,
+                usePw = state.usePw,
+                pwEntryName = state.pwEntryName.trim(),
             )
+            // Leaving pw mode: the fetched secret must not keep authenticating requests.
+            if (!state.usePw) pwCredentialSession.clear()
             retrofitHolder.rebuild(state.serverUrl, okHttpClient)
 
             val result = folderRepository.listFolders()
