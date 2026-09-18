@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import nu.staldal.mymail.repository.MessageSummaryWithSnippet
+import nu.staldal.mymail.ui.component.ScheduleTimeLabel
 import nu.staldal.mymail.utils.formatMessageListDate
 import java.time.Instant
 import java.time.LocalDate
@@ -545,6 +546,8 @@ private fun SearchResultRow(
             fontWeight = if (!item.summary.read) FontWeight.Bold else FontWeight.Normal,
             maxLines = 1,
         )
+        // A scheduled or snoozed message found here carries its time too.
+        ScheduleTimeLabel(message = item.summary)
         Text(
             text = parseSnippet(item.snippet),
             style = MaterialTheme.typography.bodySmall,

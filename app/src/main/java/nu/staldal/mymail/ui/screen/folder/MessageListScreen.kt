@@ -75,6 +75,7 @@ import nu.staldal.mymail.SNOOZED_ID
 import nu.staldal.mymail.TRASH_ID
 import nu.staldal.mymail.model.Folder
 import nu.staldal.mymail.model.MessageSummary
+import nu.staldal.mymail.ui.component.ScheduleTimeLabel
 import nu.staldal.mymail.utils.formatMessageListDate
 import java.time.OffsetDateTime
 
@@ -505,6 +506,10 @@ private fun MessageRow(
                         modifier = Modifier.size(16.dp),
                     )
                 }
+                ScheduleTimeLabel(
+                    message = message,
+                    modifier = Modifier.padding(start = 6.dp),
+                )
                 if (message.sendFailed && (folderId == SCHEDULED_ID || folderId == DRAFTS_ID)) {
                     Spacer(modifier = Modifier.width(4.dp))
                     val badgeColor =

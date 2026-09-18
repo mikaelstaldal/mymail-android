@@ -63,6 +63,8 @@ API (generated) → Repository → ViewModel → Screen (Compose)
 
 **RFC 5322 parsing:** Always use `org.apache.james:apache-mime4j-core` (`AddressList.parse()`) for address parsing — handles edge cases like quoted display names containing commas.
 
+**Date formatting** (`DateTimeUtils.kt`): two ladders that must not be swapped. `formatMessageListDate` measures elapsed time, so a *future* value lands in its under-an-hour branch and every scheduled send reads as "just now"; `formatScheduleDate` is the one for `send_at` and `snoozed_until` — it reads in both directions and keeps the time of day at every distance. `ui/component/ScheduleTimeLabel` renders them in the Scheduled and Snoozed listings and in search results, checking both the folder and the value.
+
 **Built-in folder IDs** (`FolderIds.kt`): `INBOX_ID=1`, `SENT_ID=2`, `DRAFTS_ID=3`, `TRASH_ID=4`, `SCHEDULED_ID=5`, `SNOOZED_ID=6`, `JUNK_ID=7`. User folders have `id ≥ 100`.
 
 ## pw integration
