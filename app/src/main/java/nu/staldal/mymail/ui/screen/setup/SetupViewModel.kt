@@ -62,15 +62,10 @@ class SetupViewModel @Inject constructor(
             usePw = credentialStore.usePw,
             pwEntryName = credentialStore.pwEntryName ?: "",
             pwAvailable = PwClient.isAvailable(context),
-            pwCredentialLoaded = pwCredentialSession.current != null,
+            pwCredentialLoaded = pwCredentialSession.holdsCredentialFor(credentialStore.pwEntryName),
         )
     )
     val uiState: StateFlow<SetupUiState> = _uiState.asStateFlow()
-
-    // The entry name the in-memory credential was fetched for, so that editing the name shows the
-    // credential as no longer loaded without discarding one the rest of the app is still using.
-    private var pwFetchedFor: String? =
-        credentialStore.pwEntryName?.takeIf { pwCredentialSession.current != null }
 
     init {
         viewModelScope.launch {
@@ -78,12 +73,13 @@ class SetupViewModel @Inject constructor(
         }
     }
 
+    /**
+     * The session binds each credential to the entry it was fetched for, so editing the name shows
+     * the credential as no longer loaded without discarding one the rest of the app is still using.
+     */
     private fun refreshPwCredentialLoaded() {
         _uiState.update {
-            it.copy(
-                pwCredentialLoaded = pwCredentialSession.current != null &&
-                    pwFetchedFor?.trim() == it.pwEntryName.trim(),
-            )
+            it.copy(pwCredentialLoaded = pwCredentialSession.holdsCredentialFor(it.pwEntryName))
         }
     }
 
@@ -114,8 +110,7 @@ class SetupViewModel @Inject constructor(
             _uiState.update { it.copy(errorMessage = "pw returned no credential") }
             return
         }
-        pwFetchedFor = _uiState.value.pwEntryName
-        pwCredentialSession.set(credential)
+        pwCredentialSession.set(_uiState.value.pwEntryName.trim(), credential)
         _uiState.update { it.copy(errorMessage = null) }
         refreshPwCredentialLoaded()
     }

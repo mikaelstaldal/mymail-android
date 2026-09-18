@@ -21,7 +21,7 @@ class AuthConfigTest {
         pwEntryName = "MyMail",
     )
 
-    private val fromPw = Credential("pw-user", "pw-secret")
+    private val fromPw = FetchedCredential("MyMail", Credential("pw-user", "pw-secret"))
 
     @Test
     fun `stored credentials authenticate without pw`() {
@@ -60,12 +60,39 @@ class AuthConfigTest {
     }
 
     @Test
+    fun `a credential fetched for another entry is not used`() {
+        val other = FetchedCredential("Something else", Credential("other-user", "other-secret"))
+
+        assertNull(pw.activeCredential(other))
+        assertFalse(pw.isConfigured(other))
+        // Still waiting for a credential for the configured entry.
+        assertTrue(pw.needsPwFetch(other))
+    }
+
+    @Test
+    fun `entry names match regardless of surrounding whitespace`() {
+        assertEquals("pw-user", pw.copy(pwEntryName = " MyMail ").activeCredential(fromPw)?.username)
+        assertEquals(
+            "pw-user",
+            pw.activeCredential(FetchedCredential(" MyMail ", fromPw.credential))?.username,
+        )
+    }
+
+    @Test
     fun `a blank entry name is not a usable pw configuration`() {
         val blank = pw.copy(pwEntryName = " ")
 
         assertNull(blank.activeCredential(fromPw))
         assertFalse(blank.isConfigured(fromPw))
         assertFalse(blank.needsPwFetch(null))
+    }
+
+    @Test
+    fun `the stored password is not part of the string representation`() {
+        val text = stored.toString()
+
+        assertTrue(text.contains("https://mail.example"))
+        assertFalse(text.contains("s3cret"))
     }
 
     @Test
@@ -85,14 +112,45 @@ class PwCredentialSessionTest {
         assertNull(session.current)
         assertNull(session.credential.value)
 
-        session.set(Credential("user", "s3cret"))
+        session.set("MyMail", Credential("user", "s3cret"))
 
-        assertEquals("user", session.current?.username)
-        assertEquals("s3cret", session.credential.value?.password)
+        assertEquals("user", session.current?.credential?.username)
+        assertEquals("s3cret", session.credential.value?.credential?.password)
 
         session.clear()
 
         assertNull(session.current)
         assertNull(session.credential.value)
+    }
+
+    @Test
+    fun `a credential is only handed out for the entry it was fetched for`() {
+        val session = PwCredentialSession()
+        session.set("MyMail", Credential("user", "s3cret"))
+
+        assertEquals("user", session.credentialFor("MyMail")?.username)
+        assertEquals("user", session.credentialFor(" MyMail ")?.username)
+        assertTrue(session.holdsCredentialFor("MyMail"))
+
+        assertNull(session.credentialFor("Something else"))
+        assertNull(session.credentialFor(null))
+        assertFalse(session.holdsCredentialFor("Something else"))
+    }
+
+    @Test
+    fun `asking pw is remembered for the process and forgotten when the session is cleared`() {
+        val session = PwCredentialSession()
+
+        assertFalse(session.fetchAttempted)
+
+        session.markFetchAttempted()
+
+        assertTrue(session.fetchAttempted)
+        // A cancelled fetch leaves the attempt recorded but no credential.
+        assertNull(session.current)
+
+        session.clear()
+
+        assertFalse(session.fetchAttempted)
     }
 }

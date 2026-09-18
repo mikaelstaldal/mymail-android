@@ -67,16 +67,29 @@ class MainActivity : ComponentActivity() {
 
     private var pollingJob: Job? = null
 
-    // Set while the pw activity launched from onCreate is running, so that only that fetch — and
-    // not one the user starts on the setup screen — moves on to the folder list.
+    // Answers "where should the pending pw result navigate": set while the pw activity launched
+    // from onCreate is running, so that only that fetch — and not one the user starts on the setup
+    // screen — moves on to the folder list. That is activity-scoped UI state, which is why it, and
+    // only it, goes into saved instance state.
+    //
+    // It deliberately does NOT answer "has this process asked pw yet" — that is process-scoped and
+    // lives in PwCredentialSession.fetchAttempted. Saved instance state is restored after a process
+    // kill as well, so deciding the fetch from it leaves a restored process never asking pw again.
     private var awaitingStartupPwFetch = false
     private val startupPwFetchFinished = MutableStateFlow(false)
+
+    // The entry the running fetch asked pw for, so that the result is bound to the right entry
+    // even if the configuration changed while pw was in front.
+    private var pwFetchEntryName: String? = null
 
     private val pwLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        PwClient.credentialFromResult(result.resultCode, result.data)
-            ?.let(pwCredentialSession::set)
+        val entryName = pwFetchEntryName
+        PwClient.credentialFromResult(result.resultCode, result.data)?.let { credential ->
+            if (entryName != null) pwCredentialSession.set(entryName, credential)
+        }
+        pwFetchEntryName = null
         if (awaitingStartupPwFetch) {
             awaitingStartupPwFetch = false
             startupPwFetchFinished.value = true
@@ -165,11 +178,15 @@ class MainActivity : ComponentActivity() {
         if (hasCredentials) {
             MailPollingWorker.enqueuePolling(this)
             startForegroundPolling()
-        } else if (savedInstanceState == null) {
-            fetchPwCredentialIfConfigured()
         } else {
-            // Recreated while pw was in front: keep waiting for that result instead of asking again.
-            awaitingStartupPwFetch = savedInstanceState.getBoolean(STATE_AWAITING_PW_FETCH, false)
+            // Recreated while pw was in front: keep waiting for that result. Note that this cannot
+            // be told apart from a restore after a process kill by the bundle alone — the guard on
+            // asking pw again is the process-scoped flag inside fetchPwCredentialIfConfigured().
+            if (savedInstanceState?.getBoolean(STATE_AWAITING_PW_FETCH, false) == true) {
+                awaitingStartupPwFetch = true
+                pwFetchEntryName = credentialStore.pwEntryName
+            }
+            fetchPwCredentialIfConfigured()
         }
     }
 
@@ -182,20 +199,32 @@ class MainActivity : ComponentActivity() {
     /**
      * pw credentials are process-memory-only, so a configured app starts each process without one.
      * Ask pw for it right away instead of making the user visit the setup screen every time.
+     *
+     * Asked at most once per process — including when the launch throws — so that a user who
+     * cancels pw is not asked again on every activity recreation. A new process starts over,
+     * which is exactly when the credential is gone.
      */
     private fun fetchPwCredentialIfConfigured() {
+        if (pwCredentialSession.fetchAttempted) return
         val entryName = credentialStore.pwEntryName ?: return
         if (!credentialStore.needsPwFetch() || !PwClient.isAvailable(this)) return
+        pwCredentialSession.markFetchAttempted()
         awaitingStartupPwFetch = true
+        pwFetchEntryName = entryName
         try {
             pwLauncher.launch(PwClient.createFetchIntent(entryName))
         } catch (_: ActivityNotFoundException) {
             // pw may have been uninstalled since it was resolved.
-            awaitingStartupPwFetch = false
+            abandonStartupPwFetch()
         } catch (_: SecurityException) {
             // The setup screen explains that both apps must share a signing key.
-            awaitingStartupPwFetch = false
+            abandonStartupPwFetch()
         }
+    }
+
+    private fun abandonStartupPwFetch() {
+        awaitingStartupPwFetch = false
+        pwFetchEntryName = null
     }
 
     private fun startForegroundPolling() {

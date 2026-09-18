@@ -30,10 +30,12 @@ class PwClientTest {
     }
 
     @Test
-    fun `the password is not part of the string representation`() {
-        val text = Credential("user", "s3cret").toString()
+    fun `neither half of a credential is part of a string representation`() {
+        val credential = Credential("user@example.com", "s3cret")
 
-        assertTrue(text.contains("user"))
-        assertFalse(text.contains("s3cret"))
+        for (text in listOf(credential.toString(), FetchedCredential("MyMail", credential).toString())) {
+            assertFalse(text.contains("user@example.com"))
+            assertFalse(text.contains("s3cret"))
+        }
     }
 }

@@ -78,10 +78,20 @@ instead of this app's encrypted preferences. The contract is documented in `../p
   Launching can still throw `ActivityNotFoundException` or `SecurityException`; both are handled.
 - Only `use_pw` and the exact `pw_entry_name` are persisted. The returned username and password live
   in `PwCredentialSession` (a `@Singleton` `StateFlow`) for the current process only, and must never
-  be logged, persisted, or placed in saved instance state. `Credential.toString()` redacts the password.
+  be logged, persisted, or placed in saved instance state. `Credential.toString()` redacts both halves,
+  and `AuthConfig` has a hand-written `toString()` because a data class would print the password.
+- The session holds a `FetchedCredential` — the credential **plus the entry it was fetched for** —
+  and readers name the entry they want (`credentialFor`, `AuthConfig.activeCredential`). A credential
+  fetched for one entry must never authenticate a server configured for another, which is exactly
+  what happens if the entry name is edited in the setup screen after a fetch.
 - Startup: `MainActivity` launches the pw activity when `CredentialStore.needsPwFetch()` holds, and
   moves on to the folder list once that fetch produces a credential. The setup screen offers the same
   fetch manually, and `SetupUiState.canConnect` blocks **Connect** until the credential is in memory.
+- The "already asked pw" guard is `PwCredentialSession.fetchAttempted`, which is process-scoped on
+  purpose. It must **not** be derived from `savedInstanceState == null`: Android restores that bundle
+  after a process kill too, which is precisely when the memory-only credential is gone and pw has to
+  be asked again. Saved instance state carries only `awaiting_pw_fetch`, which distinguishes the
+  startup fetch (navigates onward) from one started on the setup screen across a rotation.
 - **Limitation:** because the secret is process-memory-only, background polling cannot authenticate
   after a process restart. `MailPollingWorker` then skips the poll (returning `success` so the
   periodic work stays scheduled) until the user opens MyMail and completes the pw activity.

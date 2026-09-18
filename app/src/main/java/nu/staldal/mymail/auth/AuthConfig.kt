@@ -16,9 +16,13 @@ data class AuthConfig(
 ) {
     private val pwConfigured: Boolean get() = usePw && !pwEntryName.isNullOrBlank()
 
-    /** The credential to authenticate with, or `null` when none is available. */
-    fun activeCredential(pwCredential: Credential?): Credential? = if (usePw) {
-        if (pwConfigured) pwCredential else null
+    /**
+     * The credential to authenticate with, or `null` when none is available. In pw mode only a
+     * credential fetched for the configured entry counts: one fetched for some other entry belongs
+     * to another site and must not be sent to this server.
+     */
+    fun activeCredential(pwCredential: FetchedCredential?): Credential? = if (usePw) {
+        if (pwConfigured && pwCredential?.isFor(pwEntryName) == true) pwCredential.credential else null
     } else {
         if (storedUsername != null && storedPassword != null) {
             Credential(storedUsername, storedPassword)
@@ -28,13 +32,17 @@ data class AuthConfig(
     }
 
     /** Whether the app can talk to the server right now. */
-    fun isConfigured(pwCredential: Credential?): Boolean =
+    fun isConfigured(pwCredential: FetchedCredential?): Boolean =
         serverUrl != null && activeCredential(pwCredential) != null
 
     /**
-     * True when the app is configured for pw but this process has no credential yet, so the pw
-     * activity has to be launched before anything can be fetched from the server.
+     * True when the app is configured for pw but this process has no credential for the configured
+     * entry, so the pw activity has to be launched before anything can be fetched from the server.
      */
-    fun needsPwFetch(pwCredential: Credential?): Boolean =
-        serverUrl != null && pwConfigured && pwCredential == null
+    fun needsPwFetch(pwCredential: FetchedCredential?): Boolean =
+        serverUrl != null && pwConfigured && pwCredential?.isFor(pwEntryName) != true
+
+    // A data class would print the stored password.
+    override fun toString(): String =
+        "AuthConfig(serverUrl=$serverUrl, usePw=$usePw, pwEntryName=$pwEntryName, credentials=<redacted>)"
 }
