@@ -14,8 +14,8 @@ import kotlinx.coroutines.launch
 import nu.staldal.mymail.BuildConfig
 import nu.staldal.mymail.auth.Credential
 import nu.staldal.mymail.auth.CredentialStore
-import nu.staldal.mymail.auth.PwClient
-import nu.staldal.mymail.auth.PwCredentialSession
+import nu.staldal.mymail.auth.MyPassClient
+import nu.staldal.mymail.auth.MyPassCredentialSession
 import nu.staldal.mymail.di.RetrofitHolder
 import nu.staldal.mymail.repository.FolderRepository
 import okhttp3.OkHttpClient
@@ -39,7 +39,7 @@ data class SetupUiState(
     val errorMessage: String? = null,
     val navigateToFolders: Boolean = false,
 ) {
-    /** In pw mode there is nothing to connect with until pw has handed over a credential. */
+    /** In MyPass mode there is nothing to connect with until MyPass has handed over a credential. */
     val canConnect: Boolean
         get() = !isLoading && (!usePw || (pwEntryName.isNotBlank() && pwCredentialLoaded))
 }
@@ -50,7 +50,7 @@ class SetupViewModel @Inject constructor(
     val retrofitHolder: RetrofitHolder,
     val folderRepository: FolderRepository,
     private val okHttpClient: OkHttpClient,
-    private val pwCredentialSession: PwCredentialSession,
+    private val myPassCredentialSession: MyPassCredentialSession,
     @ApplicationContext private val context: Context,
     @Named("plain") val prefs: SharedPreferences,
 ) : ViewModel() {
@@ -61,15 +61,15 @@ class SetupViewModel @Inject constructor(
             username = credentialStore.username ?: "",
             usePw = credentialStore.usePw,
             pwEntryName = credentialStore.pwEntryName ?: "",
-            pwAvailable = PwClient.isAvailable(context),
-            pwCredentialLoaded = pwCredentialSession.holdsCredentialFor(credentialStore.pwEntryName),
+            pwAvailable = MyPassClient.isAvailable(context),
+            pwCredentialLoaded = myPassCredentialSession.holdsCredentialFor(credentialStore.pwEntryName),
         )
     )
     val uiState: StateFlow<SetupUiState> = _uiState.asStateFlow()
 
     init {
         viewModelScope.launch {
-            pwCredentialSession.credential.collect { refreshPwCredentialLoaded() }
+            myPassCredentialSession.credential.collect { refreshPwCredentialLoaded() }
         }
     }
 
@@ -79,7 +79,7 @@ class SetupViewModel @Inject constructor(
      */
     private fun refreshPwCredentialLoaded() {
         _uiState.update {
-            it.copy(pwCredentialLoaded = pwCredentialSession.holdsCredentialFor(it.pwEntryName))
+            it.copy(pwCredentialLoaded = myPassCredentialSession.holdsCredentialFor(it.pwEntryName))
         }
     }
 
@@ -104,20 +104,20 @@ class SetupViewModel @Inject constructor(
         refreshPwCredentialLoaded()
     }
 
-    /** Result of the pw activity launched from the setup screen. */
+    /** Result of the MyPass activity launched from the setup screen. */
     fun onPwCredential(credential: Credential?) {
         if (credential == null) {
             _uiState.update { it.copy(errorMessage = "pw returned no credential") }
             return
         }
-        pwCredentialSession.set(_uiState.value.pwEntryName.trim(), credential)
+        myPassCredentialSession.set(_uiState.value.pwEntryName.trim(), credential)
         _uiState.update { it.copy(errorMessage = null) }
         refreshPwCredentialLoaded()
     }
 
     fun onPwLaunchFailed() {
         _uiState.update {
-            it.copy(errorMessage = "Could not open pw — check that both apps use the same signing key")
+            it.copy(errorMessage = "Could not open MyPass — check that both apps use the same signing key")
         }
     }
 
@@ -137,7 +137,7 @@ class SetupViewModel @Inject constructor(
                     return@launch
                 }
                 if (!state.pwCredentialLoaded) {
-                    _uiState.update { it.copy(errorMessage = "Fetch the credential from pw first") }
+                    _uiState.update { it.copy(errorMessage = "Fetch the credential from MyPass first") }
                     return@launch
                 }
             } else if (state.password.isEmpty() &&
@@ -165,7 +165,7 @@ class SetupViewModel @Inject constructor(
                 pwEntryName = state.pwEntryName.trim(),
             )
             // Leaving pw mode: the fetched secret must not keep authenticating requests.
-            if (!state.usePw) pwCredentialSession.clear()
+            if (!state.usePw) myPassCredentialSession.clear()
             retrofitHolder.rebuild(state.serverUrl, okHttpClient)
 
             val result = folderRepository.listFolders()

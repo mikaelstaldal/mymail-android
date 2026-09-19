@@ -5,18 +5,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 
-/**
- * Contract for fetching one credential from the separately installed pw app.
- *
- * The action, extra names and result semantics are documented in `../pw-android/INTEGRATION.md`;
- * the constants below are duplicated from that contract and must be kept in step with it.
- */
-object PwClient {
-    private const val PACKAGE = "nu.staldal.pw"
-    private const val ACTION_FETCH = "nu.staldal.pw.action.FETCH_PASSWORD"
-    private const val EXTRA_NAME = "nu.staldal.pw.extra.NAME"
-    private const val EXTRA_USERNAME = "nu.staldal.pw.extra.RESULT_USERNAME"
-    private const val EXTRA_PASSWORD = "nu.staldal.pw.extra.RESULT_PASSWORD"
+/** Client for fetching one credential from the separately installed MyPass app. */
+object MyPassClient {
+    private const val PACKAGE = "nu.staldal.mypass"
+    private const val ACTION_FETCH = "nu.staldal.mypass.action.FETCH_PASSWORD"
+    private const val EXTRA_NAME = "nu.staldal.mypass.extra.NAME"
+    private const val EXTRA_USERNAME = "nu.staldal.mypass.extra.RESULT_USERNAME"
+    private const val EXTRA_PASSWORD = "nu.staldal.mypass.extra.RESULT_PASSWORD"
 
     /** Explicit intent — pinning the package keeps another app from claiming the action. */
     fun createFetchIntent(entryName: String): Intent =
@@ -30,7 +25,7 @@ object PwClient {
             PackageManager.MATCH_DEFAULT_ONLY,
         ) != null
 
-    /** Any result code other than [Activity.RESULT_OK] means that pw returned no credential. */
+    /** Any result code other than [Activity.RESULT_OK] means that MyPass returned no credential. */
     fun credentialFromResult(resultCode: Int, data: Intent?): Credential? {
         if (resultCode != Activity.RESULT_OK) return null
         return credentialFromExtras(

@@ -26,8 +26,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import nu.staldal.mymail.auth.AuthEventBus
 import nu.staldal.mymail.auth.CredentialStore
-import nu.staldal.mymail.auth.PwClient
-import nu.staldal.mymail.auth.PwCredentialSession
+import nu.staldal.mymail.auth.MyPassClient
+import nu.staldal.mymail.auth.MyPassCredentialSession
 import nu.staldal.mymail.intent.PendingComposeIntentHolder
 import nu.staldal.mymail.intent.parseComposeIntent
 import nu.staldal.mymail.repository.FolderRepository
@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
     lateinit var pendingComposeIntentHolder: PendingComposeIntentHolder
 
     @Inject
-    lateinit var pwCredentialSession: PwCredentialSession
+    lateinit var myPassCredentialSession: MyPassCredentialSession
 
     @Inject
     @Named("plain")
@@ -86,8 +86,8 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         val entryName = pwFetchEntryName
-        PwClient.credentialFromResult(result.resultCode, result.data)?.let { credential ->
-            if (entryName != null) pwCredentialSession.set(entryName, credential)
+        MyPassClient.credentialFromResult(result.resultCode, result.data)?.let { credential ->
+            if (entryName != null) myPassCredentialSession.set(entryName, credential)
         }
         pwFetchEntryName = null
         if (awaitingStartupPwFetch) {
@@ -205,14 +205,14 @@ class MainActivity : ComponentActivity() {
      * which is exactly when the credential is gone.
      */
     private fun fetchPwCredentialIfConfigured() {
-        if (pwCredentialSession.fetchAttempted) return
+        if (myPassCredentialSession.fetchAttempted) return
         val entryName = credentialStore.pwEntryName ?: return
-        if (!credentialStore.needsPwFetch() || !PwClient.isAvailable(this)) return
-        pwCredentialSession.markFetchAttempted()
+        if (!credentialStore.needsPwFetch() || !MyPassClient.isAvailable(this)) return
+        myPassCredentialSession.markFetchAttempted()
         awaitingStartupPwFetch = true
         pwFetchEntryName = entryName
         try {
-            pwLauncher.launch(PwClient.createFetchIntent(entryName))
+            pwLauncher.launch(MyPassClient.createFetchIntent(entryName))
         } catch (_: ActivityNotFoundException) {
             // pw may have been uninstalled since it was resolved.
             abandonStartupPwFetch()

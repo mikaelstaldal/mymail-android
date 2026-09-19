@@ -5,7 +5,7 @@ package nu.staldal.mymail.auth
  *
  * Kept as a plain value, separate from [CredentialStore]'s encrypted storage, so that the rules
  * around pw mode can be reasoned about and unit-tested on their own. The pw secret is never part
- * of it: it is passed in from [PwCredentialSession] at each call.
+ * of it: it is passed in from [MyPassCredentialSession] at each call.
  */
 data class AuthConfig(
     val serverUrl: String? = null,

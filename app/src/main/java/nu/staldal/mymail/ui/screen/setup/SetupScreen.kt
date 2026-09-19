@@ -45,7 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import nu.staldal.mymail.MainActivity
-import nu.staldal.mymail.auth.PwClient
+import nu.staldal.mymail.auth.MyPassClient
 import nu.staldal.mymail.worker.MailPollingWorker
 
 @Composable
@@ -60,7 +60,7 @@ fun SetupScreen(
     val pwLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        viewModel.onPwCredential(PwClient.credentialFromResult(result.resultCode, result.data))
+        viewModel.onPwCredential(MyPassClient.credentialFromResult(result.resultCode, result.data))
     }
 
     LaunchedEffect(uiState.navigateToFolders) {
@@ -104,7 +104,7 @@ fun SetupScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Fetch credentials from pw")
+                Text("Fetch credentials from MyPass")
                 Switch(
                     checked = uiState.usePw,
                     onCheckedChange = viewModel::onUsePwChange,
@@ -116,7 +116,7 @@ fun SetupScreen(
                 OutlinedTextField(
                     value = uiState.pwEntryName,
                     onValueChange = viewModel::onPwEntryNameChange,
-                    label = { Text("pw entry name") },
+                    label = { Text("MyPass entry name") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, autoCorrectEnabled = false),
                     modifier = Modifier.fillMaxWidth(),
@@ -126,7 +126,7 @@ fun SetupScreen(
                 OutlinedButton(
                     onClick = {
                         try {
-                            pwLauncher.launch(PwClient.createFetchIntent(uiState.pwEntryName.trim()))
+                            pwLauncher.launch(MyPassClient.createFetchIntent(uiState.pwEntryName.trim()))
                         } catch (_: ActivityNotFoundException) {
                             viewModel.onPwLaunchFailed()
                         } catch (_: SecurityException) {
@@ -136,18 +136,18 @@ fun SetupScreen(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !uiState.isLoading && uiState.pwAvailable && uiState.pwEntryName.isNotBlank(),
                 ) {
-                    Text(if (uiState.pwCredentialLoaded) "Credential loaded — fetch again" else "Fetch from pw")
+                    Text(if (uiState.pwCredentialLoaded) "Credential loaded — fetch again" else "Fetch from MyPass")
                 }
 
                 if (!uiState.pwAvailable) {
                     Text(
-                        text = "pw is not installed, or is not signed with the same key as MyMail.",
+                        text = "MyPass is not installed, or is not signed with the same key as MyMail.",
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 } else {
                     Text(
-                        text = "The password is kept in memory only, so pw is asked again every " +
+                        text = "The password is kept in memory only, so MyPass is asked again every " +
                             "time MyMail starts. Background polling pauses until then.",
                         style = MaterialTheme.typography.bodySmall,
                     )

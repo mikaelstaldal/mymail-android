@@ -103,11 +103,11 @@ class AuthConfigTest {
     }
 }
 
-class PwCredentialSessionTest {
+class MyPassCredentialSessionTest {
 
     @Test
     fun `a session starts empty and can be filled and emptied again`() {
-        val session = PwCredentialSession()
+        val session = MyPassCredentialSession()
 
         assertNull(session.current)
         assertNull(session.credential.value)
@@ -125,7 +125,7 @@ class PwCredentialSessionTest {
 
     @Test
     fun `a credential is only handed out for the entry it was fetched for`() {
-        val session = PwCredentialSession()
+        val session = MyPassCredentialSession()
         session.set("MyMail", Credential("user", "s3cret"))
 
         assertEquals("user", session.credentialFor("MyMail")?.username)
@@ -139,7 +139,7 @@ class PwCredentialSessionTest {
 
     @Test
     fun `asking pw is remembered for the process and forgotten when the session is cleared`() {
-        val session = PwCredentialSession()
+        val session = MyPassCredentialSession()
 
         assertFalse(session.fetchAttempted)
 

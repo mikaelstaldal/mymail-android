@@ -49,7 +49,7 @@ API (generated) → Repository → ViewModel → Screen (Compose)
 
 **`RetrofitHolder`:** A `@Singleton` wrapping `AtomicReference<Retrofit>`. Repositories call `holder.get().create(FooApi::class.java)` on **every request** (not at field-init time) because `holder.get()` may return a new `Retrofit` after `rebuild()` is called when the server URL changes.
 
-**Authentication:** `BasicAuthInterceptor` adds `Authorization: Basic …` to every OkHttp request, reading `CredentialStore.activeCredential` at request time (the stored credential, or the one fetched from pw — see **pw integration**). On HTTP 401, the interceptor emits on `AuthEventBus` (a `@Singleton` `MutableSharedFlow`); `MainActivity` collects this and navigates to `setup`, clearing the back-stack. The logging interceptor must **never** log request headers (they contain credentials).
+**Authentication:** `BasicAuthInterceptor` adds `Authorization: Basic …` to every OkHttp request, reading `CredentialStore.activeCredential` at request time (the stored credential, or the one fetched from MyPass — see **MyPass integration**). On HTTP 401, the interceptor emits on `AuthEventBus` (a `@Singleton` `MutableSharedFlow`); `MainActivity` collects this and navigates to `setup`, clearing the back-stack. The logging interceptor must **never** log request headers (they contain credentials).
 
 **Credentials storage:** Server URL, username, and password go exclusively in `EncryptedSharedPreferences`, alongside the pw options `use_pw` and `pw_entry_name`. Non-sensitive prefs (`inbox_unread_count`, dark mode, density, notification preference) go in plain `SharedPreferences` file `"mymail_prefs"`. Never mix these.
 
@@ -67,16 +67,16 @@ API (generated) → Repository → ViewModel → Screen (Compose)
 
 **Built-in folder IDs** (`FolderIds.kt`): `INBOX_ID=1`, `SENT_ID=2`, `DRAFTS_ID=3`, `TRASH_ID=4`, `SCHEDULED_ID=5`, `SNOOZED_ID=6`, `JUNK_ID=7`. User folders have `id ≥ 100`.
 
-## pw integration
+## MyPass integration
 
-The server credentials can optionally come from the [pw Android app](https://github.com/mikaelstaldal/pw-android)
-instead of this app's encrypted preferences. The contract is documented in `../pw-android/INTEGRATION.md`.
+The server credentials can optionally come from the [MyPass Android app](https://github.com/mikaelstaldal/mypass-android)
+instead of this app's encrypted preferences. The contract is documented in `../mypass-android/INTEGRATION.md`.
 
-- `auth/PwClient.kt` duplicates pw's action and extra names; keep them in step with that contract.
-  The intent is explicit — the `nu.staldal.pw` package is pinned so no other app can claim the action.
-- pw guards the activity with the signature permission `nu.staldal.pw.permission.FETCH_PASSWORD`.
+- `auth/MyPassClient.kt` duplicates MyPass's action and extra names; keep them in step with that contract.
+  The intent is explicit — the `nu.staldal.mypass` package is pinned so no other app can claim the action.
+- MyPass guards the activity with the signature permission `nu.staldal.mypass.permission.FETCH_PASSWORD`.
   Both apps must be signed with the same key (see the `debug` signing config in `app/build.gradle.kts`),
-  and the manifest `<queries>` entry makes pw visible to `resolveActivity` on Android 11 and later.
+  and the manifest `<queries>` entry makes MyPass visible to `resolveActivity` on Android 11 and later.
   Launching can still throw `ActivityNotFoundException` or `SecurityException`; both are handled.
 - Only `use_pw` and the exact `pw_entry_name` are persisted. The returned username and password live
   in `PwCredentialSession` (a `@Singleton` `StateFlow`) for the current process only, and must never

@@ -16,7 +16,7 @@ import javax.inject.Singleton
  * want.
  */
 @Singleton
-class PwCredentialSession @Inject constructor() {
+class MyPassCredentialSession @Inject constructor() {
     private val _credential = MutableStateFlow<FetchedCredential?>(null)
     val credential: StateFlow<FetchedCredential?> = _credential.asStateFlow()
 

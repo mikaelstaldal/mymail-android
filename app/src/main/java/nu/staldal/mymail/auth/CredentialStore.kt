@@ -7,7 +7,7 @@ import javax.inject.Singleton
 @Singleton
 class CredentialStore @Inject constructor(
     private val prefs: EncryptedSharedPreferences,
-    private val pwCredentialSession: PwCredentialSession,
+    private val myPassCredentialSession: MyPassCredentialSession,
 ) {
     var serverUrl: String?
         get() = prefs.getString(KEY_SERVER_URL, null)
@@ -43,7 +43,7 @@ class CredentialStore @Inject constructor(
      * pw mode is the normal state until the user has completed the pw activity in this process.
      */
     val activeCredential: Credential?
-        get() = config.activeCredential(pwCredentialSession.current)
+        get() = config.activeCredential(myPassCredentialSession.current)
 
     fun save(
         serverUrl: String,
@@ -75,16 +75,16 @@ class CredentialStore @Inject constructor(
             .remove(KEY_USE_PW)
             .remove(KEY_PW_ENTRY_NAME)
             .apply()
-        pwCredentialSession.clear()
+        myPassCredentialSession.clear()
     }
 
-    fun hasCredentials(): Boolean = config.isConfigured(pwCredentialSession.current)
+    fun hasCredentials(): Boolean = config.isConfigured(myPassCredentialSession.current)
 
     /**
      * True when the app is configured for pw but this process has no credential yet, so the pw
      * activity has to be launched before anything can be fetched from the server.
      */
-    fun needsPwFetch(): Boolean = config.needsPwFetch(pwCredentialSession.current)
+    fun needsPwFetch(): Boolean = config.needsPwFetch(myPassCredentialSession.current)
 
     private companion object {
         const val KEY_SERVER_URL = "server_url"
