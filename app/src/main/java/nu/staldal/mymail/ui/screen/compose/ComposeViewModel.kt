@@ -80,6 +80,9 @@ class ComposeViewModel @Inject constructor(
     application: Application,
 ) : AndroidViewModel(application) {
 
+    private val _replyWarning = MutableStateFlow<String?>(null)
+    val replyWarning: StateFlow<String?> = _replyWarning.asStateFlow()
+
     private val _initState = MutableStateFlow<ComposeInitState>(ComposeInitState.Loading)
     val initState: StateFlow<ComposeInitState> = _initState.asStateFlow()
 
@@ -245,6 +248,9 @@ class ComposeViewModel @Inject constructor(
                     return
                 }
 
+                _replyWarning.value = source.warnings.orEmpty()
+                    .filter { it.kind.value == "reply_to_mismatch" }
+                    .joinToString("\n") { nu.staldal.mymail.utils.warningText(it) }.takeIf { it.isNotEmpty() }
                 val selectedIdentity = pickIdentityForReply(source, identList)
                 val ownAddresses = identList.map { it.address.lowercase() }
 

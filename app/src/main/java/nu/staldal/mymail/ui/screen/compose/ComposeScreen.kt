@@ -80,6 +80,7 @@ fun ComposeScreen(
     draftId: String? = null,
     viewModel: ComposeViewModel = hiltViewModel(),
 ) {
+    val replyWarning by viewModel.replyWarning.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -203,6 +204,11 @@ fun ComposeScreen(
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    replyWarning?.let {
+                        Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+                            Text(it, modifier = Modifier.padding(12.dp))
+                        }
+                    }
                     if (permanentError != null) {
                         Surface(
                             color = MaterialTheme.colorScheme.errorContainer,

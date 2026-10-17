@@ -86,6 +86,10 @@ import nu.staldal.mymail.intent.parseIcsEvent
 import nu.staldal.mymail.model.AttachmentMeta
 import nu.staldal.mymail.model.MessageDetail
 import nu.staldal.mymail.model.MessageSummary
+import nu.staldal.mymail.utils.warningText
+import nu.staldal.mymail.utils.orderedWarnings
+import nu.staldal.mymail.utils.attachmentWarning
+import nu.staldal.mymail.utils.senderDisplays
 import nu.staldal.mymail.utils.formatMessageDetailDate
 import nu.staldal.mymail.utils.formatMessageListDate
 
@@ -127,6 +131,8 @@ fun MessageDetailScreen(
         navController.previousBackStackEntry?.savedStateHandle?.set("removedMessageId", messageId)
         navController.popBackStack()
     }
+
+    var pendingRiskyOpen by remember(messageId) { mutableStateOf<Pair<String, () -> Unit>?>(null) }
 
     var showDiscardConfirm by remember { mutableStateOf(false) }
     var showCancelScheduledConfirm by remember { mutableStateOf(false) }
@@ -244,6 +250,16 @@ fun MessageDetailScreen(
                         }
                     }
 
+                    if (message.warnings.isNotEmpty()) {
+                        item {
+                            Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("Message warnings", fontWeight = FontWeight.Bold)
+                                    orderedWarnings(message.warnings).forEach { Text(warningText(it)) }
+                                }
+                            }
+                        }
+                    }
                     item {
                         HeaderSection(
                             message = message,
@@ -303,46 +319,55 @@ fun MessageDetailScreen(
                         }
                         items(message.attachments) { attachment ->
                             val attachId = attachment.id.toLong()
+                            val risk = attachmentWarning(
+                                message.warnings, message.attachments.map { it.filename }, attachment.filename,
+                            )
                             AttachmentRow(
                                 attachment = attachment,
                                 state = attachmentStates[attachId] ?: AttachmentState.Idle,
+                                riskText = risk?.let { warningText(it) },
                                 onTap = {
-                                    val attachState = attachmentStates[attachId]
-                                    if (attachState is AttachmentState.Ready) {
-                                        if (isCalendarAttachment(attachment.contentType, attachment.filename)) {
-                                            scope.launch {
-                                                val content = runCatching {
-                                                    context.contentResolver.openInputStream(attachState.uri)
-                                                        ?.bufferedReader()?.use { it.readText() }
-                                                }.getOrNull()
-                                                val event = content?.let { parseIcsEvent(it) }
-                                                if (event != null) {
-                                                    try {
-                                                        context.startActivity(buildCalendarInsertIntent(event))
-                                                    } catch (_: Exception) {
-                                                        snackbarHostState.showSnackbar("No calendar app found")
+                                    val openOrDownload: () -> Unit = {
+                                        val attachState = attachmentStates[attachId]
+                                        if (attachState is AttachmentState.Ready) {
+                                            if (isCalendarAttachment(attachment.contentType, attachment.filename)) {
+                                                scope.launch {
+                                                    val content = runCatching {
+                                                        context.contentResolver.openInputStream(attachState.uri)
+                                                            ?.bufferedReader()?.use { it.readText() }
+                                                    }.getOrNull()
+                                                    val event = content?.let { parseIcsEvent(it) }
+                                                    if (event != null) {
+                                                        try {
+                                                            context.startActivity(buildCalendarInsertIntent(event))
+                                                        } catch (_: Exception) {
+                                                            snackbarHostState.showSnackbar("No calendar app found")
+                                                        }
+                                                    } else {
+                                                        snackbarHostState.showSnackbar("Could not read calendar event")
                                                     }
-                                                } else {
-                                                    snackbarHostState.showSnackbar("Could not read calendar event")
+                                                }
+                                            } else {
+                                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                    setDataAndType(attachState.uri, context.contentResolver.getType(attachState.uri))
+                                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                }
+                                                try {
+                                                    context.startActivity(intent)
+                                                } catch (_: Exception) {
+                                                    scope.launch { snackbarHostState.showSnackbar("No app found to open this file") }
                                                 }
                                             }
-                                        } else {
-                                            val intent = Intent(Intent.ACTION_VIEW).apply {
-                                                setDataAndType(attachState.uri, context.contentResolver.getType(attachState.uri))
-                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                            }
-                                            try {
-                                                context.startActivity(intent)
-                                            } catch (_: Exception) {
-                                                scope.launch { snackbarHostState.showSnackbar("No app found to open this file") }
-                                            }
+                                        } else if (
+                                            attachState !is AttachmentState.Downloading &&
+                                            attachState !is AttachmentState.BlockedMimeType
+                                        ) {
+                                            viewModel.downloadAttachment(attachId, attachment)
                                         }
-                                    } else if (
-                                        attachState !is AttachmentState.Downloading &&
-                                        attachState !is AttachmentState.BlockedMimeType
-                                    ) {
-                                        viewModel.downloadAttachment(attachId, attachment)
                                     }
+                                    if (risk != null && attachmentStates[attachId] is AttachmentState.Ready) {
+                                        pendingRiskyOpen = warningText(risk) to openOrDownload
+                                    } else openOrDownload()
                                 },
                             )
                         }
@@ -364,6 +389,19 @@ fun MessageDetailScreen(
 
                 }
 
+                if (pendingRiskyOpen != null) {
+                    AlertDialog(
+                        onDismissRequest = { pendingRiskyOpen = null },
+                        title = { Text("Open risky attachment?") },
+                        text = { Text("${pendingRiskyOpen?.first.orEmpty()} Only open it if you trust its source.") },
+                        confirmButton = { TextButton(onClick = {
+                            val open = pendingRiskyOpen
+                            pendingRiskyOpen = null
+                            open?.second?.invoke()
+                        }) { Text("Open") } },
+                        dismissButton = { TextButton(onClick = { pendingRiskyOpen = null }) { Text("Cancel") } },
+                    )
+                }
                 if (showDiscardConfirm) {
                     AlertDialog(
                         onDismissRequest = { showDiscardConfirm = false },
@@ -483,12 +521,14 @@ private fun HeaderSection(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = message.fromAddr.ifBlank { "(no sender)" },
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                )
+                senderDisplays(message.fromAddr).forEach { sender ->
+                    sender.name?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                    Text(
+                        text = sender.address,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
                 if (!expanded) {
                     Text(
                         text = message.subject.ifBlank { "(no subject)" },
@@ -512,7 +552,10 @@ private fun HeaderSection(
                     .padding(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                HeaderRow("From", message.fromAddr)
+                senderDisplays(message.fromAddr).forEach { sender ->
+                    sender.name?.let { HeaderRow("Sender name", it) }
+                    HeaderRow("From address", sender.address)
+                }
                 HeaderRow("To", message.toAddr)
                 if (message.ccAddr.isNotBlank()) HeaderRow("Cc", message.ccAddr)
                 if (message.bccAddr.isNotBlank()) HeaderRow("Bcc", message.bccAddr)
@@ -576,6 +619,7 @@ private fun AttachmentRow(
     attachment: AttachmentMeta,
     state: AttachmentState,
     onTap: () -> Unit,
+    riskText: String? = null,
 ) {
     Column(
         modifier = Modifier
@@ -583,6 +627,7 @@ private fun AttachmentRow(
             .clickable(enabled = state !is AttachmentState.Downloading && state !is AttachmentState.BlockedMimeType) { onTap() }
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
+        riskText?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 imageVector = Icons.Filled.AttachFile,

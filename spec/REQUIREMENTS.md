@@ -236,6 +236,15 @@
 
 **REQ-MSGDETAIL-24** All destructive actions (Move, Delete, Discard, Mark as junk, Not junk, Cancel scheduled send, Cancel snooze) set the navigation result keys (`needsRefresh = true`, `removedMessageId = <id>`) on the previous back-stack entry before calling popBackStack.
 
+**REQ-MSGDETAIL-25** Show server-computed `warnings` in a card above the header, with one plain-language entry per warning. Show authentication failure, display-name deception, lookalike domain, Reply-To mismatch, deceptive links, risky attachments, then first-time sender; retain all detail fields needed to identify the risk. Missing warnings do not establish safety; never show a prominent verified badge.
+
+**REQ-MSGDETAIL-26** Show sender display name and actual address separately. The address remains visible when the header is collapsed. Decode IDN domains and mark them as internationalized, also displaying the ASCII form. Keep each name paired with its address for multiple senders; label unparseable From headers explicitly. Sender rows and warning text wrap without fixed heights or line limits, including with large font scaling.
+
+**REQ-MSGDETAIL-27** Keep message body links non-clickable. Deceptive-link warnings show the link text and full real destination. Any future clickable-link support must add confirmation showing the full URL before navigation.
+
+**REQ-MSGDETAIL-28** Mark attachments named by server `risky_attachment` warnings and require confirmation each time one is opened, including calendar attachments. If a warning filename matches no attachment, conservatively mark and confirm all attachments. REQ-MSGDETAIL-09's MIME blocklist remains an unconditional hard stop; confirmation never bypasses it.
+
+
 ---
 
 ## 8. Compose Screen
@@ -325,6 +334,8 @@ To: <source To>
 **REQ-COMPOSE-28** Attachment files cached during the re-upload flow are deleted when the Compose screen leaves the composition.
 
 **REQ-COMPOSE-29** For Forward, `source_message_id` is included in the initial POST /api/v1/drafts (and in every retry of that POST). It is omitted from all subsequent PUT calls.
+
+**REQ-COMPOSE-30** Reply and Reply All show a note from the source message’s server-computed `reply_to_mismatch` warnings, identifying that replies go to another domain.
 
 ---
 
