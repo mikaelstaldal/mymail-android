@@ -65,10 +65,14 @@ fun formatMessageListDate(date: OffsetDateTime): String {
  * behind it, and a send that keeps failing is retried with the original time left in place.
  *
  * The time of day is kept at every distance, because when a message goes out is the point of the
- * column rather than incidental to it. [now] is a parameter so the ladder can be tested.
+ * column rather than incidental to it. [now] and [zoneId] can be supplied to test the ladder
+ * independently of the current date and device zone.
  */
-fun formatScheduleDate(date: OffsetDateTime, now: OffsetDateTime = OffsetDateTime.now()): String {
-    val zoneId = ZoneId.systemDefault()
+fun formatScheduleDate(
+    date: OffsetDateTime,
+    now: OffsetDateTime = OffsetDateTime.now(),
+    zoneId: ZoneId = ZoneId.systemDefault(),
+): String {
     val localNow = now.atZoneSameInstant(zoneId).toLocalDateTime()
     val localDate = date.atZoneSameInstant(zoneId).toLocalDateTime()
 

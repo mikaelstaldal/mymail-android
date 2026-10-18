@@ -4,16 +4,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 
 class ScheduleDateTest {
 
-    // Local noon today: far enough from either day boundary that "Today"/"Tomorrow"/"Yesterday"
-    // are unambiguous whatever zone the test runs in.
-    private val now: OffsetDateTime = OffsetDateTime.now()
-        .withHour(12).withMinute(0).withSecond(0).withNano(0)
+    private val zone = ZoneId.of("Europe/Stockholm")
+    private val now = ZonedDateTime.of(2026, 10, 18, 12, 0, 0, 0, zone)
 
-    private fun format(date: OffsetDateTime) = formatScheduleDate(date, now)
+    private fun format(date: ZonedDateTime) =
+        formatScheduleDate(date.toOffsetDateTime(), now.toOffsetDateTime(), zone)
 
     @Test
     fun `a time within the hour reads forwards or backwards`() {
@@ -64,5 +64,32 @@ class ScheduleDateTest {
         assertTrue(otherYear.endsWith(", 12:00"))
         assertTrue(otherYear.contains(now.plusYears(1).year.toString()))
         assertFalse(sameYear.contains(now.year.toString()))
+    }
+
+    @Test
+    fun `calendar days preserve local noon across both DST transitions`() {
+        for (eve in listOf(
+            ZonedDateTime.of(2026, 3, 28, 12, 0, 0, 0, zone),
+            ZonedDateTime.of(2026, 10, 24, 12, 0, 0, 0, zone),
+        )) {
+            val nextDay = eve.plusDays(1)
+            assertTrue(eve.offset != nextDay.offset)
+            assertEquals(
+                "Tomorrow 12:00",
+                formatScheduleDate(nextDay.toOffsetDateTime(), eve.toOffsetDateTime(), zone),
+            )
+            assertEquals(
+                "Yesterday 12:00",
+                formatScheduleDate(eve.toOffsetDateTime(), nextDay.toOffsetDateTime(), zone),
+            )
+        }
+    }
+
+    @Test
+    fun `fixed offset timestamps display the local time after a DST transition`() {
+        val fixedOffsetDate = now.toOffsetDateTime().plusDays(20)
+        assertTrue(
+            formatScheduleDate(fixedOffsetDate, now.toOffsetDateTime(), zone).endsWith(", 11:00"),
+        )
     }
 }
