@@ -904,13 +904,13 @@ class ComposeViewModel @Inject constructor(
             }
             chips.ifEmpty { parseAddressChipsFallback(addrString) }
         } catch (e: Exception) {
-            // mime4j rejects non-ASCII display names decoded from MIME encoded-words; fall back to regex
+            // Preserve the existing best-effort fallback for address lists MIME4J cannot parse.
             Log.w(TAG, "Failed to parse address list: $addrString", e)
             parseAddressChipsFallback(addrString)
         }
     }
 
-    // Regex fallback for addresses that mime4j rejects (e.g. decoded non-ASCII display names)
+    // Regex fallback for address lists that MIME4J cannot parse.
     private fun parseAddressChipsFallback(addrString: String): List<AddressChip> {
         val result = mutableListOf<AddressChip>()
         // Match optional display name followed by <email@domain>, or bare email@domain

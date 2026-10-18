@@ -238,7 +238,7 @@
 
 **REQ-MSGDETAIL-25** Show server-computed `warnings` in a card above the header, with one plain-language entry per warning. Show authentication failure, display-name deception, lookalike domain, Reply-To mismatch, deceptive links, risky attachments, then first-time sender; retain all detail fields needed to identify the risk. Missing warnings do not establish safety; never show a prominent verified badge.
 
-**REQ-MSGDETAIL-26** Show sender display name and actual address separately. The address remains visible when the header is collapsed. Decode IDN domains and mark them as internationalized, also displaying the ASCII form. Keep each name paired with its address for multiple senders; label unparseable From headers explicitly. Sender rows and warning text wrap without fixed heights or line limits, including with large font scaling.
+**REQ-MSGDETAIL-26** Show sender display name and actual address separately, accepting server-decoded Unicode display names. The address remains visible when the header is collapsed. Decode IDN domains and mark them as internationalized, also displaying the ASCII form. Keep each name paired with its address for multiple senders; label unparseable From headers explicitly. Sender rows and warning text wrap without fixed heights or line limits, including with large font scaling.
 
 **REQ-MSGDETAIL-27** Keep message body links non-clickable. Deceptive-link warnings show the link text and full real destination. Any future clickable-link support must add confirmation showing the full URL before navigation.
 

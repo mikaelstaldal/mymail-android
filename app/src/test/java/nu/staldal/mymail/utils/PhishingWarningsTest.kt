@@ -44,6 +44,20 @@ class PhishingWarningsTest {
         assertEquals(SenderDisplay(null, "sender@example.org"), senderDisplays("sender@example.org").single())
     }
 
+    @Test fun `server decoded unicode display name is separate from address`() {
+        assertEquals(listOf(SenderDisplay("Mikael Ståldal", "mikaelstaldal@gmail.com")),
+            senderDisplays("Mikael Ståldal <mikaelstaldal@gmail.com>"))
+    }
+
+    @Test fun `decoded unicode names preserve all following addresses`() {
+        assertEquals(listOf(SenderDisplay("张三", "first@example.org"), SenderDisplay("Åsa", "second@example.org")),
+            senderDisplays("张三 <first@example.org>, Åsa <second@example.org>"))
+    }
+
+    @Test fun `unicode names still require an actual mailbox address`() {
+        assertTrue(senderDisplays("Åsa <").single().address.startsWith("Unparsed From header:"))
+    }
+
     @Test fun `internationalized domains are decoded and marked`() {
         val sender = senderDisplays("Bank <sender@xn--bcher-kva.example>").single()
         assertEquals("Bank", sender.name)
