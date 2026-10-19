@@ -87,6 +87,7 @@ import nu.staldal.mymail.model.AttachmentMeta
 import nu.staldal.mymail.model.MessageDetail
 import nu.staldal.mymail.model.MessageSummary
 import nu.staldal.mymail.utils.warningText
+import nu.staldal.mymail.ui.component.MessageWarningText
 import nu.staldal.mymail.utils.orderedWarnings
 import nu.staldal.mymail.utils.attachmentWarning
 import nu.staldal.mymail.utils.senderDisplays
@@ -255,7 +256,7 @@ fun MessageDetailScreen(
                             Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text("Message warnings", fontWeight = FontWeight.Bold)
-                                    orderedWarnings(message.warnings).forEach { Text(warningText(it)) }
+                                    orderedWarnings(message.warnings).forEach { MessageWarningText(it) }
                                 }
                             }
                         }

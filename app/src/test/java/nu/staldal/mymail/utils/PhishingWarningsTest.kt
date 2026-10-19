@@ -26,6 +26,21 @@ class PhishingWarningsTest {
         assertTrue(text.contains("host: evil.example"))
     }
 
+    @Test fun `long deceptive links are abbreviated while full tooltip text is preserved`() {
+        val label = "https://bank.example/" + "a".repeat(100)
+        val destination = "https://evil.example/" + "b".repeat(100)
+        val warning = MessageWarning(MessageWarning.Kind.deceptive_link,
+            text = label, href = destination, decodedHost = "evil.example")
+        assertEquals("Deceptive link: ${label.take(59)}… → ${destination.take(59)}… (host: evil.example)",
+            warningText(warning, abbreviateLinks = true))
+        assertEquals("Deceptive link: $label → $destination (host: evil.example)", warningText(warning))
+    }
+
+    @Test fun `short deceptive links are unchanged`() {
+        val warning = MessageWarning(MessageWarning.Kind.deceptive_link, text = "a".repeat(60), href = "https://evil.example")
+        assertEquals(warningText(warning), warningText(warning, abbreviateLinks = true))
+    }
+
     @Test fun `attachment reasons are readable`() {
         MessageWarning.Reason.entries.forEach {
             val text = warningText(MessageWarning(MessageWarning.Kind.risky_attachment, filename = "invoice.exe", reason = it))

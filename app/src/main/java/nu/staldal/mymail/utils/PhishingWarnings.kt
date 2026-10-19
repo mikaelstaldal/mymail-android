@@ -5,7 +5,7 @@ import nu.staldal.mymail.model.MessageWarning
 import org.apache.james.mime4j.field.address.DefaultAddressParser
 
 // Presentation only: the server decides which signals apply.
-fun warningText(warning: MessageWarning): String = with(warning) {
+fun warningText(warning: MessageWarning, abbreviateLinks: Boolean = false): String = with(warning) {
     when (kind.value) {
         "auth_fail" -> "Sender authentication failed: ${failedChecks.orEmpty().joinToString { if (it.value == "dkim_alignment") "DKIM alignment" else it.value.uppercase() }}."
         "display_name_address" -> "The sender's display name contains a different address or domain: ${address.orEmpty()}."
@@ -13,7 +13,7 @@ fun warningText(warning: MessageWarning): String = with(warning) {
             (resembles?.let { ", resembles $it" } ?: "") + "."
         "reply_to_mismatch" -> "Replies go to a different domain: ${address.orEmpty()}."
         "first_time_sender" -> "You have never sent mail to this address."
-        "deceptive_link" -> "Deceptive link: ${text.orEmpty()} → ${href.orEmpty()}" +
+        "deceptive_link" -> "Deceptive link: ${warningLinkText(text.orEmpty(), abbreviateLinks)} → ${warningLinkText(href.orEmpty(), abbreviateLinks)}" +
             (decodedHost?.let { " (host: $it)" } ?: "")
         "risky_attachment" -> "Risky attachment: ${filename.orEmpty()} (${when (reason?.value) {
             "double_extension" -> "double file extension"
@@ -24,6 +24,9 @@ fun warningText(warning: MessageWarning): String = with(warning) {
         else -> "Message warning: ${kind.value}"
     }
 }
+
+private fun warningLinkText(value: String, abbreviate: Boolean): String =
+    if (abbreviate && value.length > 60) value.take(59) + "…" else value
 
 fun orderedWarnings(warnings: List<MessageWarning>): List<MessageWarning> {
     val order = listOf("auth_fail", "display_name_address", "lookalike_domain", "reply_to_mismatch", "deceptive_link", "risky_attachment", "first_time_sender")
