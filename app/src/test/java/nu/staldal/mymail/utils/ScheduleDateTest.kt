@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
@@ -64,6 +65,24 @@ class ScheduleDateTest {
         assertTrue(otherYear.endsWith(", 12:00"))
         assertTrue(otherYear.contains(now.plusYears(1).year.toString()))
         assertFalse(sameYear.contains(now.year.toString()))
+    }
+
+    @Test
+    fun `relative minutes cross spring forward using elapsed time`() {
+        val before = OffsetDateTime.parse("2026-03-29T01:50:00+01:00")
+        val after = OffsetDateTime.parse("2026-03-29T03:10:00+02:00")
+
+        assertEquals("in 20 min", formatScheduleDate(after, before, zone))
+        assertEquals("20 min ago", formatScheduleDate(before, after, zone))
+    }
+
+    @Test
+    fun `relative minutes cross fall back using elapsed time`() {
+        val before = OffsetDateTime.parse("2026-10-25T02:50:00+02:00")
+        val after = OffsetDateTime.parse("2026-10-25T02:10:00+01:00")
+
+        assertEquals("in 20 min", formatScheduleDate(after, before, zone))
+        assertEquals("20 min ago", formatScheduleDate(before, after, zone))
     }
 
     @Test

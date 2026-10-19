@@ -79,8 +79,8 @@ fun formatScheduleDate(
     // Positive is the future here — the opposite sign to formatMessageListDate. Measured in
     // seconds, because MINUTES.between truncates towards zero and would hand the half-minute just
     // past as a 0 that reads as the future. The sign picks the wording and the magnitude the
-    // number, separately.
-    val seconds = ChronoUnit.SECONDS.between(localNow, localDate)
+    // number, separately. Compare instants so DST changes cannot distort the elapsed time.
+    val seconds = ChronoUnit.SECONDS.between(now.toInstant(), date.toInstant())
     if (seconds > -3600 && seconds < 3600) {
         // Floored, so the last seconds before the hour do not read as "60 min", and floored to at
         // least 1 so the minute either side of now is not "0 min".
