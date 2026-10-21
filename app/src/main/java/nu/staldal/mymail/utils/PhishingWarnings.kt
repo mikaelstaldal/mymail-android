@@ -8,10 +8,11 @@ import org.apache.james.mime4j.field.address.DefaultAddressParser
 fun warningText(warning: MessageWarning, abbreviateLinks: Boolean = false): String = with(warning) {
     when (kind.value) {
         "auth_fail" -> "Sender authentication failed: ${failedChecks.orEmpty().joinToString { if (it.value == "dkim_alignment") "DKIM alignment" else it.value.uppercase() }}."
-        "display_name_address" -> "The sender's display name contains a different address or domain: ${address.orEmpty()}."
+        "malformed_sender" -> "The sender address is malformed or ambiguous."
+        "display_name_address" -> "The sender's display name contains a different address or domain: ${visibleFormatCharacters(address.orEmpty())}."
         "lookalike_domain" -> "Lookalike domain: ${domain.orEmpty()} (${punycode.orEmpty()})" +
             (resembles?.let { ", resembles $it" } ?: "") + "."
-        "reply_to_mismatch" -> "Replies go to a different domain: ${address.orEmpty()}."
+        "reply_to_mismatch" -> "Replies go to a different domain: ${visibleFormatCharacters(address.orEmpty())}."
         "first_time_sender" -> "You have never sent mail to this address."
         "deceptive_link" -> "Deceptive link: ${warningLinkText(text.orEmpty(), abbreviateLinks)} → ${warningLinkText(href.orEmpty(), abbreviateLinks)}" +
             (decodedHost?.let { " (host: $it)" } ?: "")
@@ -29,7 +30,7 @@ private fun warningLinkText(value: String, abbreviate: Boolean): String =
     if (abbreviate && value.length > 60) value.take(59) + "…" else value
 
 fun orderedWarnings(warnings: List<MessageWarning>): List<MessageWarning> {
-    val order = listOf("auth_fail", "display_name_address", "lookalike_domain", "reply_to_mismatch", "deceptive_link", "risky_attachment", "first_time_sender")
+    val order = listOf("auth_fail", "malformed_sender", "display_name_address", "lookalike_domain", "reply_to_mismatch", "deceptive_link", "risky_attachment", "first_time_sender")
     return warnings.sortedBy { order.indexOf(it.kind.value).let { index -> if (index < 0) Int.MAX_VALUE else index } }
 }
 
@@ -46,20 +47,43 @@ fun senderDisplays(from: String): List<SenderDisplay> = try {
     if (mailboxes.isEmpty()) unparsedSender(from)
     else mailboxes.map { mailbox ->
         val domain = mailbox.domain.orEmpty()
-        val decoded = IDN.toUnicode(domain)
+        // IDN normalization can silently discard format controls from malformed domains.
+        val hasFormatCharacters = domain.codePoints().anyMatch(::isFormatCharacter)
+        val decoded = if (hasFormatCharacters) domain else IDN.toUnicode(domain)
         val local = mailbox.localPart.orEmpty()
         // Preserve the distinction between a quoted local part and address-list punctuation.
         val renderedLocal = if (local.matches(Regex("[A-Za-z0-9!#\$%&'*+/=?^_`{|}~.-]+"))) local
             else "\"" + local.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
         val address = renderedLocal + if (domain.isNotEmpty()) "@$decoded" else ""
-        SenderDisplay(mailbox.name?.takeIf { it.isNotBlank() },
-            if (decoded != domain || domain.any { it.code > 127 }) {
-                "$address (internationalized domain: ${IDN.toASCII(domain)})"
-            } else address)
+        val displayedAddress = if (!hasFormatCharacters && (decoded != domain || domain.any { it.code > 127 })) {
+            "$address (internationalized domain: ${IDN.toASCII(domain)})"
+        } else address
+        SenderDisplay(
+            mailbox.name?.takeIf { it.isNotBlank() }?.let(::visibleFormatCharacters),
+            visibleFormatCharacters(displayedAddress),
+        )
     }
 } catch (_: Exception) {
     unparsedSender(from)
 }
 
 private fun unparsedSender(from: String): List<SenderDisplay> =
-    listOf(SenderDisplay(null, if (from.isBlank()) "(no sender)" else "Unparsed From header: $from"))
+    listOf(SenderDisplay(null, if (from.isBlank()) "(no sender)" else "Unparsed From header: ${visibleFormatCharacters(from)}"))
+
+/** Expose Unicode format controls without changing the underlying address used for replies. */
+internal fun visibleFormatCharacters(value: String): String = buildString {
+    value.codePoints().forEach { codePoint ->
+        if (isFormatCharacter(codePoint)) {
+            append("[U+")
+            append(codePoint.toString(16).uppercase().padStart(4, '0'))
+            append(']')
+        } else {
+            appendCodePoint(codePoint)
+        }
+    }
+}
+
+private fun isFormatCharacter(codePoint: Int): Boolean = when (Character.getType(codePoint)) {
+    Character.FORMAT.toInt(), Character.LINE_SEPARATOR.toInt(), Character.PARAGRAPH_SEPARATOR.toInt() -> true
+    else -> false
+}

@@ -7,6 +7,7 @@ import org.junit.Test
 class PhishingWarningsTest {
     @Test fun `all server kinds have plain language descriptions`() {
         val expected = mapOf(
+            MessageWarning.Kind.malformed_sender to "The sender address is malformed or ambiguous.",
             MessageWarning.Kind.auth_fail to "Sender authentication failed:",
             MessageWarning.Kind.display_name_address to "The sender's display name contains a different address or domain:",
             MessageWarning.Kind.lookalike_domain to "Lookalike domain:",
@@ -52,6 +53,41 @@ class PhishingWarningsTest {
     @Test fun `authentication negatives precede first contact`() {
         val warnings = listOf(MessageWarning(MessageWarning.Kind.first_time_sender), MessageWarning(MessageWarning.Kind.auth_fail))
         assertEquals(MessageWarning.Kind.auth_fail, orderedWarnings(warnings).first().kind)
+    }
+
+    @Test fun `malformed sender precedes lower priority warnings`() {
+        val warnings = listOf(MessageWarning(MessageWarning.Kind.first_time_sender),
+            MessageWarning(MessageWarning.Kind.malformed_sender), MessageWarning(MessageWarning.Kind.auth_fail))
+        assertEquals(listOf(MessageWarning.Kind.auth_fail, MessageWarning.Kind.malformed_sender,
+            MessageWarning.Kind.first_time_sender), orderedWarnings(warnings).map { it.kind })
+    }
+
+    @Test fun `warning addresses expose invisible format controls`() {
+        listOf(MessageWarning.Kind.display_name_address, MessageWarning.Kind.reply_to_mismatch).forEach { kind ->
+            val text = warningText(MessageWarning(kind, address = "bank\u200B@evil\u202E.example\u2069"))
+            assertTrue(text.contains("bank[U+200B]@evil[U+202E].example[U+2069]"))
+        }
+    }
+
+    @Test fun `sender presentation exposes format controls in names and addresses`() {
+        val sender = senderDisplays("Bank\u200B <sender@example.org>").single()
+        assertEquals("Bank[U+200B]", sender.name)
+        assertEquals("Unparsed From header: <[U+202E]", senderDisplays("<\u202E").single().address)
+        assertEquals("a[U+E0001]b", visibleFormatCharacters("a" + String(Character.toChars(0xE0001)) + "b"))
+        assertEquals("Åsa 张三", visibleFormatCharacters("Åsa 张三"))
+    }
+
+    @Test fun `sender domain format controls survive IDN normalization`() {
+        val address = senderDisplays("Bank <x@pay\u200Bpal.com>").single().address
+        assertTrue(address.contains("pay[U+200B]pal.com"))
+        assertFalse(address.contains("x@paypal.com"))
+    }
+
+    @Test fun `warning addresses expose line and paragraph separators`() {
+        val text = warningText(MessageWarning(MessageWarning.Kind.reply_to_mismatch,
+            address = "a\u2028b\u2029@example.org"))
+        assertTrue(text.contains("a[U+2028]b[U+2029]@example.org"))
+        assertEquals("a[U+2028]b[U+2029]", visibleFormatCharacters("a\u2028b\u2029"))
     }
 
     @Test fun `quoted display name is separate from actual sender`() {

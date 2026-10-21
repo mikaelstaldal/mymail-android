@@ -282,6 +282,11 @@ private fun ContactRow(
             style = if (contact.name.isNotEmpty()) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
             color = if (contact.name.isNotEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
         )
+        Text(
+            text = if (contact.explicit) "Saved by you" else "Automatically collected",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
