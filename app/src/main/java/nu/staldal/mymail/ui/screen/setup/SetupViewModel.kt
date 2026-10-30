@@ -51,8 +51,8 @@ class SetupViewModel @Inject constructor(
     val folderRepository: FolderRepository,
     private val okHttpClient: OkHttpClient,
     private val myPassCredentialSession: MyPassCredentialSession,
-    @ApplicationContext private val context: Context,
-    @Named("plain") val prefs: SharedPreferences,
+    @param:ApplicationContext private val context: Context,
+    @param:Named("plain") val prefs: SharedPreferences,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(

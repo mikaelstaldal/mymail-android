@@ -33,7 +33,7 @@ sealed class MessageListUiState {
 class MessageListViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val folderRepository: FolderRepository,
-    @Named("plain") private val prefs: SharedPreferences,
+    @param:Named("plain") private val prefs: SharedPreferences,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<MessageListUiState>(MessageListUiState.Loading)

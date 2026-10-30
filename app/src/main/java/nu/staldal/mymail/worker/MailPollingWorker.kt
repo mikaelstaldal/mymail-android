@@ -40,7 +40,7 @@ class MailPollingWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val folderRepository: FolderRepository,
     private val credentialStore: CredentialStore,
-    @Named("plain") private val prefs: SharedPreferences,
+    @param:Named("plain") private val prefs: SharedPreferences,
     private val app: Application,
 ) : CoroutineWorker(context, workerParams) {
 

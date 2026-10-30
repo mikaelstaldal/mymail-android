@@ -1,8 +1,8 @@
 [versions]
 agp = "9.1.1"
 kotlin = "2.2.10"
-ksp = "2.3.2"
-hilt = "2.57.2"
+ksp = "2.3.12"
+hilt = "2.59.2"
 composeBom = "2025.04.01"
 navigationCompose = "2.9.0"
 retrofit = "2.11.0"
@@ -78,7 +78,6 @@ espresso-core = { group = "androidx.test.espresso", name = "espresso-core", vers
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

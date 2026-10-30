@@ -4,7 +4,6 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
@@ -85,10 +84,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
     }
-    
-    kotlinOptions {
-        jvmTarget = "21"
-    }
 
     buildFeatures {
         compose = true
@@ -122,9 +117,9 @@ openApiGenerate {
     )
 }
 
-kotlin.sourceSets["main"].kotlin.srcDir(
-    layout.buildDirectory.dir("generated/openapi/src/main/kotlin")
-)
+android.sourceSets.named("main") {
+    kotlin.directories.add(layout.buildDirectory.dir("generated/openapi/src/main/kotlin").get().asFile.path)
+}
 
 afterEvaluate {
     tasks.named("compileDebugKotlin") { dependsOn("openApiGenerate") }

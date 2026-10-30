@@ -20,7 +20,7 @@ data class PreferencesState(
 
 @HiltViewModel
 class PreferencesViewModel @Inject constructor(
-    @Named("plain") private val prefs: SharedPreferences,
+    @param:Named("plain") private val prefs: SharedPreferences,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(loadFromPrefs())
