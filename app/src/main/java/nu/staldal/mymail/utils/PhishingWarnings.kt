@@ -14,6 +14,7 @@ fun warningText(warning: MessageWarning, abbreviateLinks: Boolean = false): Stri
             (resembles?.let { ", resembles $it" } ?: "") + "."
         "reply_to_mismatch" -> "Replies go to a different domain: ${visibleFormatCharacters(address.orEmpty())}."
         "first_time_sender" -> "You have never sent mail to this address."
+        "too_many_links" -> "This message contains too many links to check them all."
         "deceptive_link" -> "Deceptive link: ${warningLinkText(text.orEmpty(), abbreviateLinks)} → ${warningLinkText(href.orEmpty(), abbreviateLinks)}" +
             (decodedHost?.let { " (host: $it)" } ?: "")
         "risky_attachment" -> "Risky attachment: ${filename.orEmpty()} (${when (reason?.value) {
@@ -30,7 +31,7 @@ private fun warningLinkText(value: String, abbreviate: Boolean): String =
     if (abbreviate && value.length > 60) value.take(59) + "…" else value
 
 fun orderedWarnings(warnings: List<MessageWarning>): List<MessageWarning> {
-    val order = listOf("auth_fail", "malformed_sender", "display_name_address", "lookalike_domain", "reply_to_mismatch", "deceptive_link", "risky_attachment", "first_time_sender")
+    val order = listOf("auth_fail", "malformed_sender", "display_name_address", "lookalike_domain", "reply_to_mismatch", "deceptive_link", "too_many_links", "risky_attachment", "first_time_sender")
     return warnings.sortedBy { order.indexOf(it.kind.value).let { index -> if (index < 0) Int.MAX_VALUE else index } }
 }
 

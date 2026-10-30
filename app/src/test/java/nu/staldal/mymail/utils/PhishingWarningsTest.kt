@@ -14,6 +14,7 @@ class PhishingWarningsTest {
             MessageWarning.Kind.reply_to_mismatch to "Replies go to a different domain:",
             MessageWarning.Kind.first_time_sender to "You have never sent mail to this address.",
             MessageWarning.Kind.deceptive_link to "Deceptive link:",
+            MessageWarning.Kind.too_many_links to "This message contains too many links to check them all.",
             MessageWarning.Kind.risky_attachment to "Risky attachment:",
         )
         assertEquals(MessageWarning.Kind.entries.toSet(), expected.keys)
